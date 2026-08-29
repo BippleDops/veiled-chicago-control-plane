@@ -5,6 +5,7 @@ const requiredAssets = ["manifest.json", "main.js", "styles.css"];
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const versions = JSON.parse(readFileSync("versions.json", "utf8"));
+const featureContract = JSON.parse(readFileSync("feature-contract.json", "utf8"));
 const errors = [];
 
 function requireEqual(label, actual, expected) {
@@ -43,6 +44,98 @@ for (const file of ["README.md", "main.js", "styles.css", "manifest.json"]) {
   for (const pattern of privatePathPatterns) {
     if (pattern.test(contents)) errors.push(`${file} contains private absolute path material`);
   }
+}
+
+const removedVaultRoots = ["1-DM Toolkit", "1-Party", "1-Session Journals", "2-World-Chicago", "3-Mechanics"];
+for (const file of ["README.md", "main.js", "FEATURE_COVERAGE.md", "src/actions.ts", "src/operating.ts", "src/paths.ts"]) {
+  const contents = readFileSync(file, "utf8");
+  for (const root of removedVaultRoots) {
+    if (contents.includes(root)) errors.push(`${file} references removed vault root: ${root}`);
+  }
+}
+
+const actionSource = readFileSync("src/actions.ts", "utf8");
+const actionIds = [...actionSource.matchAll(/^\s{4}id: "([a-z0-9-]+)",$/gm)].map((match) => match[1]);
+const duplicateActionIds = actionIds.filter((id, index) => actionIds.indexOf(id) !== index);
+if (duplicateActionIds.length > 0) errors.push(`duplicate action IDs: ${[...new Set(duplicateActionIds)].join(", ")}`);
+for (const file of ["src/actions.ts", "main.js", "companion/vcg_control.py"]) {
+  const contents = readFileSync(file, "utf8");
+  for (const retiredToken of ["tactical-ready", "--strict-ready"]) {
+    if (contents.includes(retiredToken)) errors.push(`${file} exposes retired automation: ${retiredToken}`);
+  }
+}
+for (const requiredAction of [
+  "open-live-edge-router",
+  "create-managed-note",
+  "capture-quick-inbox",
+  "set-active-session-room",
+  "scaffold-active-session-room",
+  "capture-player-declaration",
+  "generate-session-run",
+  "capture-live-event",
+  "propose-local-transcription",
+  "open-ai-context-policy",
+  "open-operations-health"
+]) {
+  if (!actionIds.includes(requiredAction)) errors.push(`required action is missing: ${requiredAction}`);
+  if (!readFileSync("main.js", "utf8").includes(requiredAction)) {
+    errors.push(`built main.js is missing action: ${requiredAction}`);
+  }
+}
+
+const coverageSource = readFileSync("FEATURE_COVERAGE.md", "utf8");
+const coverageRows = [...coverageSource.matchAll(/^\|\s+(\d+)\s+\|/gm)].map((match) => Number(match[1]));
+if (coverageRows.length !== 50 || coverageRows.some((value, index) => value !== index + 1)) {
+  errors.push(`FEATURE_COVERAGE.md must map features 1 through 50 exactly; got ${coverageRows.join(",")}`);
+}
+const expectedFeatureIds = ["NAV", "CAP", "SESSION", "AI", "GOV"].flatMap((prefix) =>
+  Array.from({ length: 10 }, (_, index) => `${prefix}-${String(index + 1).padStart(2, "0")}`)
+);
+const contractFeatures = Array.isArray(featureContract.features) ? featureContract.features : [];
+const contractIds = contractFeatures.map((feature) => feature?.id);
+if (contractIds.length !== 50 || contractIds.some((id, index) => id !== expectedFeatureIds[index])) {
+  errors.push(`feature-contract.json IDs must match the canonical taxonomy exactly; got ${contractIds.join(",")}`);
+}
+for (const feature of contractFeatures) {
+  for (const field of ["id", "owner", "status", "evidence", "test", "gate"]) {
+    if (typeof feature?.[field] !== "string" || !feature[field].trim()) {
+      errors.push(`feature-contract.json feature ${feature?.id ?? "unknown"} is missing ${field}`);
+    }
+  }
+  if (typeof feature?.id === "string" && !coverageSource.includes(`| ${feature.id} |`)) {
+    errors.push(`FEATURE_COVERAGE.md is missing stable ID ${feature.id}`);
+  }
+}
+
+const mainSource = readFileSync("src/main.ts", "utf8");
+const operatingSource = readFileSync("src/operating.ts", "utf8");
+const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
+if (mainSource.includes("findLatestPlayedFallback")) errors.push("src/main.ts retains forbidden latest-played filename inference");
+if (!mainSource.includes("transactionInProgress")) errors.push("src/main.ts is missing the transaction mutex");
+if (!mainSource.includes("targetMatchesBaseline") || !mainSource.includes("contentHash(current)")) {
+  errors.push("src/main.ts is missing preview-baseline preflight or atomic append verification");
+}
+if (!mainSource.includes("pendingWorkflowModals") || !mainSource.includes("pendingProposalModals")) {
+  errors.push("src/main.ts does not track all workflow and proposal modals");
+}
+if (!mainSource.includes('aria-disabled') || !mainSource.includes('prefers-reduced-motion: reduce')) {
+  errors.push("src/main.ts is missing accessible disabled-state or reduced-motion behavior");
+}
+if (
+  !workflowSource.includes('aria-describedby') ||
+  !workflowSource.includes('aria-required') ||
+  !workflowSource.includes('aria-invalid') ||
+  !workflowSource.includes('missing[0]') ||
+  !workflowSource.includes('captureBaselines') ||
+  !workflowSource.includes('submitting')
+) {
+  errors.push("src/workflow-ui.ts is missing modal associations, required controls, or submit guard");
+}
+if (!operatingSource.includes('MANAGED_WRITE_ROOTS') || !operatingSource.includes('MANAGED_WRITE_EXTENSIONS')) {
+  errors.push("src/operating.ts is missing the central managed-write allowlist");
+}
+if (!actionSource.match(/id: "open-terminal"[\s\S]*?protocolSafe: false/)) {
+  errors.push("open-terminal must remain protocol-unsafe");
 }
 
 if (errors.length > 0) {

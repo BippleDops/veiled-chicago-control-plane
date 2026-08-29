@@ -1,4 +1,12 @@
-export type ActionGroup = "Live operations" | "World and maps" | "Applications" | "Automation";
+import { VAULT_PATHS } from "./paths";
+
+export type ActionGroup =
+  | "Live operations"
+  | "Creation and session"
+  | "AI and governance"
+  | "World and maps"
+  | "Applications"
+  | "Automation";
 
 export type ActionKind =
   | "view"
@@ -7,6 +15,7 @@ export type ActionKind =
   | "command"
   | "integration"
   | "external"
+  | "workflow"
   | "script";
 
 export interface ControlAction {
@@ -35,13 +44,23 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     protocolSafe: true
   },
   {
+    id: "open-live-edge-router",
+    title: "Live Edge Router",
+    description: "Open the truth-aware router without inferring a next session.",
+    group: "Live operations",
+    icon: "waypoints",
+    kind: "view",
+    target: "live-edge",
+    protocolSafe: true
+  },
+  {
     id: "open-dm-control-deck",
     title: "DM Control Deck",
     description: "Open the vault's canonical operations front door.",
     group: "Live operations",
     icon: "layout-dashboard",
     kind: "note",
-    target: "1-DM Toolkit/DM Control Deck.md",
+    target: VAULT_PATHS.dmControlDeck,
     protocolSafe: true
   },
   {
@@ -51,7 +70,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Live operations",
     icon: "activity",
     kind: "note",
-    target: "1-DM Toolkit/Current State of Affairs.md",
+    target: VAULT_PATHS.currentState,
     protocolSafe: true
   },
   {
@@ -61,7 +80,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Live operations",
     icon: "route",
     kind: "note",
-    target: "1-Party/Current Leads.md",
+    target: VAULT_PATHS.currentLeads,
     protocolSafe: true
   },
   {
@@ -91,7 +110,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Live operations",
     icon: "notebook-tabs",
     kind: "note",
-    target: "1-Party/Campaign State Ledger.md",
+    target: VAULT_PATHS.campaignLedger,
     protocolSafe: true
   },
   {
@@ -101,7 +120,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Live operations",
     icon: "swords",
     kind: "note",
-    target: "1-DM Toolkit/Combat Dashboard.md",
+    target: VAULT_PATHS.combatDashboard,
     protocolSafe: true
   },
   {
@@ -125,13 +144,137 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     protocolSafe: true
   },
   {
+    id: "create-managed-note",
+    title: "Create Managed Note",
+    description: "Create a schema-validated draft through a reviewed proposal.",
+    group: "Creation and session",
+    icon: "file-plus-2",
+    kind: "workflow"
+  },
+  {
+    id: "capture-quick-inbox",
+    title: "Quick Capture",
+    description: "Append one timestamped candidate to the operations inbox.",
+    group: "Creation and session",
+    icon: "inbox",
+    kind: "workflow"
+  },
+  {
+    id: "set-active-session-room",
+    title: "Select Active Session Room",
+    description: "Select an explicit working room without changing next_session or canon.",
+    group: "Creation and session",
+    icon: "folder-key",
+    kind: "workflow"
+  },
+  {
+    id: "open-active-session-control",
+    title: "Active Session Control",
+    description: "Open the explicitly selected room's control surface.",
+    group: "Creation and session",
+    icon: "panel-top-open",
+    kind: "dynamic-note",
+    target: "active-session-control",
+    protocolSafe: true
+  },
+  {
+    id: "scaffold-active-session-room",
+    title: "Scaffold Session Room",
+    description: "Preview and create the seven draft operating notes for the explicit room.",
+    group: "Creation and session",
+    icon: "folder-cog",
+    kind: "workflow"
+  },
+  {
+    id: "open-session-preflight",
+    title: "Session Preflight",
+    description: "Open the selected room's safety, access, rules, and readiness checklist.",
+    group: "Creation and session",
+    icon: "list-checks",
+    kind: "dynamic-note",
+    target: "active-session-preflight",
+    protocolSafe: true
+  },
+  {
+    id: "capture-player-declaration",
+    title: "Record Player Declaration",
+    description: "Append verbatim player wording as review-gated evidence.",
+    group: "Creation and session",
+    icon: "message-square-quote",
+    kind: "workflow"
+  },
+  {
+    id: "generate-session-run",
+    title: "Generate Draft RUN",
+    description: "Create conditional prep only after declaration evidence exists.",
+    group: "Creation and session",
+    icon: "file-lock-2",
+    kind: "workflow"
+  },
+  {
+    id: "open-session-readiness",
+    title: "Session Readiness",
+    description: "Open the active room's fail-closed readiness board.",
+    group: "Creation and session",
+    icon: "shield-check",
+    kind: "dynamic-note",
+    target: "active-session-readiness",
+    protocolSafe: true
+  },
+  {
+    id: "capture-live-event",
+    title: "Capture Live Event",
+    description: "Append a sourced confirmed, contested, or unknown event candidate.",
+    group: "Creation and session",
+    icon: "radio-tower",
+    kind: "workflow"
+  },
+  {
+    id: "open-promotion-review",
+    title: "Promotion Review",
+    description: "Open the human-only evidence and canon-promotion gate.",
+    group: "Creation and session",
+    icon: "git-pull-request-draft",
+    kind: "dynamic-note",
+    target: "active-session-review",
+    protocolSafe: true
+  },
+  {
+    id: "propose-local-transcription",
+    title: "Propose Local Transcription",
+    description: "Create a consent receipt for an explicitly selected vault audio file; does not run transcription.",
+    group: "Creation and session",
+    icon: "audio-lines",
+    kind: "workflow"
+  },
+  {
+    id: "open-ai-context-policy",
+    title: "AI Context Policy",
+    description: "Open guarded context configurations and proposal-only boundaries.",
+    group: "AI and governance",
+    icon: "brain-circuit",
+    kind: "view",
+    target: "ai-policy",
+    protocolSafe: true
+  },
+  {
+    id: "open-operations-health",
+    title: "Operations Health",
+    description: "Open runtime capabilities, workflow gates, and recent transaction status.",
+    group: "AI and governance",
+    icon: "heart-pulse",
+    kind: "view",
+    target: "operations-health",
+    protocolSafe: true
+  },
+  {
     id: "open-campaign-board",
     title: "Campaign Board",
     description: "Open open-world deployments without promoting future prep.",
     group: "World and maps",
     icon: "network",
     kind: "note",
-    target: "1-DM Toolkit/Open-World Campaign Board.md",
+    target: VAULT_PATHS.campaignBoard,
     protocolSafe: true
   },
   {
@@ -141,7 +284,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "World and maps",
     icon: "git-branch",
     kind: "note",
-    target: "1-DM Toolkit/Faction Fronts.md",
+    target: VAULT_PATHS.factionFronts,
     protocolSafe: true
   },
   {
@@ -151,7 +294,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "World and maps",
     icon: "contact-round",
     kind: "note",
-    target: "1-DM Toolkit/NPC Quick Reference.md",
+    target: VAULT_PATHS.npcReference,
     protocolSafe: true
   },
   {
@@ -161,7 +304,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "World and maps",
     icon: "map",
     kind: "note",
-    target: "1-DM Toolkit/Map Bundles/Map Bundle Registry.md",
+    target: VAULT_PATHS.mapRegistry,
     protocolSafe: true
   },
   {
@@ -171,7 +314,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "World and maps",
     icon: "door-open",
     kind: "note",
-    target: "1-Party/Player Portal.md",
+    target: VAULT_PATHS.playerPortal,
     protocolSafe: true
   },
   {
@@ -215,7 +358,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     kind: "command",
     target: "lean-terminal:open-terminal",
     desktopOnly: true,
-    protocolSafe: true
+    protocolSafe: false
   },
   {
     id: "open-quick-search",
@@ -224,7 +367,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Applications",
     icon: "search-code",
     kind: "note",
-    target: "1-DM Toolkit/Quick Search.md",
+    target: VAULT_PATHS.quickSearch,
     protocolSafe: true
   },
   {
@@ -234,7 +377,7 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     group: "Automation",
     icon: "heart-pulse",
     kind: "note",
-    target: "1-DM Toolkit/Vault Health.md",
+    target: VAULT_PATHS.vaultHealth,
     protocolSafe: true
   },
   {
@@ -275,16 +418,6 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     icon: "braces",
     kind: "script",
     scriptId: "frontmatter-live",
-    desktopOnly: true
-  },
-  {
-    id: "run-tactical-audit",
-    title: "Audit Tactical Readiness",
-    description: "Validate ready map contracts and fallbacks.",
-    group: "Automation",
-    icon: "shield-check",
-    kind: "script",
-    scriptId: "tactical-ready",
     desktopOnly: true
   },
   {
@@ -388,14 +521,14 @@ export function profilesForPath(path: string, frontmatter: Record<string, unknow
   const audience = String(frontmatter.audience ?? "").toLowerCase();
 
   if (
-    normalized.startsWith("1-dm toolkit/") ||
-    normalized === "1-party/current leads.md" ||
+    normalized.startsWith(`${VAULT_PATHS.dmRoot.toLowerCase()}/`) ||
+    normalized === VAULT_PATHS.currentLeads.toLowerCase() ||
     /(?:dashboard|control|board|portal|quick search)/.test(basename)
   ) {
     result.add("vcg-dashboard");
   }
   if (
-    normalized.startsWith("1-session journals/") &&
+    normalized.startsWith(`${VAULT_PATHS.sessionsRoot.toLowerCase()}/`) &&
     /(?:control room|table log|quick sheet|full prep| run )/.test(` ${basename} `)
   ) {
     result.add("vcg-session");
@@ -412,7 +545,11 @@ export function profilesForPath(path: string, frontmatter: Record<string, unknow
   if (/(?:\/maps\/|\/map bundles\/)/.test(normalized) || /(?:map room|map index|atlas)/.test(basename)) {
     result.add("vcg-map-room");
   }
-  if (["player", "players"].includes(audience) || normalized === "1-party/player portal.md" || /(?:handout|player portal)/.test(basename)) {
+  if (
+    ["player", "players"].includes(audience) ||
+    normalized === VAULT_PATHS.playerPortal.toLowerCase() ||
+    /(?:handout|player portal)/.test(basename)
+  ) {
     result.add("vcg-handout");
   }
   return [...result];

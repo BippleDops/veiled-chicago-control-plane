@@ -8,6 +8,8 @@
 .vc-control-block-host,
 .vc-control-settings,
 .vc-control-confirm-modal,
+.vc-control-workflow-modal,
+.vc-control-proposal-modal,
 .vc-control-status-button,
 .workspace-leaf-content[data-type^="custom-frames-"],
 .workspace-leaf-content[data-type="terminal-view"] {
@@ -43,6 +45,8 @@
 .vc-control-block-host :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-settings :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-confirm-modal :is(button, input, select, textarea, a, summary):focus-visible,
+.vc-control-workflow-modal :is(button, input, select, textarea, a, summary):focus-visible,
+.vc-control-proposal-modal :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-status-button:focus-visible {
   outline: 3px solid var(--vccp-focus);
   outline-offset: 3px;
@@ -91,6 +95,10 @@
   .vc-control-hero,
   .vc-control-toolbar,
   .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
   .vc-control-runs,
   .vc-control-block {
     background: var(--vccp-glass);
@@ -238,6 +246,10 @@
 }
 
 .vc-control-section,
+.vc-control-router,
+.vc-control-policy,
+.vc-control-health,
+.vc-control-transactions,
 .vc-control-runs {
   min-width: 0;
   border: 1px solid var(--vccp-border);
@@ -246,6 +258,281 @@
   background: var(--vccp-surface);
   box-shadow: 0 0.7rem 2.1rem var(--vccp-shadow);
   container: vc-control-section / inline-size;
+}
+
+.vc-control-router,
+.vc-control-policy,
+.vc-control-health,
+.vc-control-transactions {
+  max-width: 96rem;
+  margin: 1rem auto 0;
+}
+
+.vc-control-router {
+  border-block-start: 3px solid var(--vccp-signal);
+}
+
+.vc-control-router-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.vc-control-router-card {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: var(--vccp-radius);
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--vccp-surface-strong) 92%, transparent);
+}
+
+.vc-control-router-card strong {
+  color: var(--text-muted);
+  font-family: var(--vccp-utility);
+  font-size: var(--font-ui-smaller);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.vc-control-router-card span {
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-weight: 680;
+}
+
+.vc-control-router-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-block-start: 0.7rem;
+}
+
+.vc-control-phase-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: vc-phase;
+}
+
+.vc-control-phase-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  border: 1px solid var(--vccp-border);
+  border-radius: var(--vccp-radius);
+  padding: 0.7rem;
+  background: color-mix(in srgb, var(--vccp-surface-strong) 94%, transparent);
+  counter-increment: vc-phase;
+}
+
+.vc-control-phase-list strong {
+  color: var(--vccp-signal);
+  font-family: var(--vccp-utility);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-control-phase-list span {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+}
+
+.vc-control-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.vc-control-profile {
+  display: grid;
+  gap: 0.35rem;
+  min-height: 7rem;
+  margin: 0;
+  border: 1px solid var(--vccp-border);
+  border-inline-start: 3px solid var(--text-muted);
+  border-radius: var(--vccp-radius);
+  padding: 0.75rem;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--vccp-surface-strong) 94%, transparent);
+  text-align: start;
+}
+
+.vc-control-profile:hover,
+.vc-control-profile.is-active {
+  border-color: var(--vccp-signal);
+  border-inline-start-color: var(--vccp-signal);
+  background: var(--background-modifier-hover);
+}
+
+.vc-control-profile.is-active::before {
+  color: var(--vccp-success);
+  font-family: var(--vccp-utility);
+  font-size: var(--font-ui-smaller);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  content: "ACTIVE PROFILE";
+}
+
+.vc-control-profile span {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.vc-control-profile small {
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.vc-control-profile code {
+  align-self: end;
+  overflow-wrap: anywhere;
+  font-size: 0.68rem;
+}
+
+.vc-control-health-list,
+.vc-control-transaction-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vc-control-health-list li,
+.vc-control-transaction-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.65rem;
+  border: 1px solid var(--vccp-border);
+  border-inline-start: 4px solid var(--vccp-success);
+  border-radius: var(--vccp-radius);
+  padding: 0.7rem;
+  background: var(--vccp-surface-strong);
+}
+
+.vc-control-health-list li.is-attention,
+.vc-control-transaction-list li.is-fail {
+  border-inline-start-color: var(--vccp-danger);
+  border-inline-start-style: dashed;
+}
+
+.vc-control-health-list li.is-info {
+  border-inline-start-color: var(--vccp-signal);
+}
+
+.vc-control-health-list strong,
+.vc-control-transaction-list strong {
+  color: var(--text-normal);
+  font-family: var(--vccp-utility);
+  font-size: var(--font-ui-small);
+}
+
+.vc-control-health-list span,
+.vc-control-transaction-list span {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.vc-control-health-list .vc-control-health-state {
+  color: var(--text-normal);
+  font-family: var(--vccp-utility);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+}
+
+.vc-control-transaction-list time,
+.vc-control-transaction-list code {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-control-workflow-intro,
+.vc-control-proposal-policy {
+  border-inline-start: 3px solid var(--vccp-signal);
+  padding-inline-start: 0.8rem;
+  color: var(--text-muted);
+}
+
+.vc-control-workflow-error {
+  border: 1px solid var(--vccp-danger);
+  border-radius: var(--vccp-radius);
+  padding: 0.65rem 0.75rem;
+  color: var(--text-error);
+  background: color-mix(in srgb, var(--background-modifier-error) 18%, transparent);
+}
+
+.vc-control-workflow-error[hidden] {
+  display: none;
+}
+
+.vc-control-workflow-modal textarea {
+  min-width: min(32rem, 60vw);
+  min-height: 8rem;
+}
+
+.vc-control-proposal-policy strong {
+  color: var(--vccp-signal);
+  font-family: var(--vccp-utility);
+  letter-spacing: 0.05em;
+}
+
+.vc-control-proposal-list {
+  display: grid;
+  gap: 0.6rem;
+  max-height: min(56vh, 42rem);
+  margin: 1rem 0;
+  padding-inline-start: 1.5rem;
+  overflow: auto;
+}
+
+.vc-control-proposal-list li {
+  border: 1px solid var(--vccp-border);
+  border-radius: var(--vccp-radius);
+  background: var(--vccp-surface-strong);
+}
+
+.vc-control-proposal-list summary {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  min-height: 2.8rem;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+}
+
+.vc-control-proposal-list summary span {
+  overflow-wrap: anywhere;
+}
+
+.vc-control-proposal-list h4 {
+  margin: 0.7rem 0.7rem 0.35rem;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+}
+
+.vc-control-proposal-list pre {
+  max-height: 18rem;
+  margin: 0 0.7rem 0.7rem;
+  overflow: auto;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.7);
+  padding: 0.7rem;
+  background: var(--code-background);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .vc-control-section.is-filtered {
@@ -302,14 +589,14 @@
   transition: border-color 140ms ease, background-color 140ms ease, translate 140ms ease;
 }
 
-.vc-control-action:hover:not(:disabled) {
+.vc-control-action:hover:not([aria-disabled="true"]) {
   border-color: var(--vccp-signal);
   border-inline-start-color: var(--vccp-signal);
   background: var(--background-modifier-hover);
   translate: 0 -1px;
 }
 
-.vc-control-action:disabled {
+.vc-control-action[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.68;
   border-inline-start-style: dashed;
@@ -368,7 +655,7 @@
   font-size: 0.62rem;
 }
 
-.vc-control-action:disabled .vc-control-action-state {
+.vc-control-action[aria-disabled="true"] .vc-control-action-state {
   color: var(--text-muted);
 }
 
@@ -573,6 +860,12 @@
   .vc-control-main {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .vc-control-router-grid,
+  .vc-control-router-actions,
+  .vc-control-profile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -598,8 +891,18 @@
   }
 
   .vc-control-grid,
-  .vc-control-block-grid {
+  .vc-control-block-grid,
+  .vc-control-router-grid,
+  .vc-control-router-actions,
+  .vc-control-phase-list,
+  .vc-control-profile-grid,
+  .vc-control-health-list,
+  .vc-control-transaction-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-workflow-modal textarea {
+    min-width: 100%;
   }
 
   .vc-control-run-list summary {
@@ -632,7 +935,7 @@
     transition: none;
   }
 
-  .vc-control-action:hover:not(:disabled) {
+  .vc-control-action:hover:not([aria-disabled="true"]) {
     translate: none;
   }
 
@@ -645,6 +948,10 @@
   .vc-control-hero,
   .vc-control-toolbar,
   .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
   .vc-control-runs,
   .vc-control-block {
     background: var(--vccp-surface);
@@ -657,6 +964,10 @@
   .vc-control-hero,
   .vc-control-toolbar,
   .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
   .vc-control-runs,
   .vc-control-block,
   .vc-control-action,

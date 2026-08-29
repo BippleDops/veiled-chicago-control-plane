@@ -10,7 +10,7 @@ A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into
 4. Choose the latest release and enable **Veiled Chicago Control Plane**.
 5. Use the radar ribbon icon or run **Veiled Chicago Control Plane: Control Plane** from the command palette.
 
-BRAT installs the release assets `manifest.json`, `main.js`, and `styles.css`. Release tag `1.0.0` matches the plugin version exactly.
+BRAT installs `manifest.json`, `main.js`, and `styles.css` from the latest published release. Each release tag must exactly match the version in `manifest.json`.
 
 ## Manual install
 
@@ -25,13 +25,21 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 ## What it does
 
 - Builds a responsive, semantic HTML campaign dashboard inside Obsidian.
-- Registers 30 fixed navigation, installed-plugin, integration, and local-script actions.
+- Registers fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions.
+- Provides a dynamic Live Edge Router that reads explicit Current State and a separately selected active room without inferring chronology.
+- Creates schema-driven draft notes through preview-bound target baselines and a rollback-aware transaction broker.
+- Scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on declaration evidence, and routes promotion through human review.
+- Defines six guarded AI context configurations. They constrain this plugin's surfaces but do not claim provider-side retrieval enforcement.
 - Renders allowlisted `vcg-control` Markdown blocks; note content cannot supply commands, paths, arguments, or shell fragments.
 - Applies workflow profiles (`vcg-dashboard`, `vcg-session`, `vcg-dossier`, `vcg-data-deck`, `vcg-map-room`, and `vcg-handout`) from the active note's path and frontmatter without editing the note.
 - Integrates with installed Obsidian commands such as Dice Roller, Initiative Tracker, Custom Frames, Lean Terminal, Meta Bind, and Local REST API when those plugins are present.
 - Exposes navigation through the `obsidian://vc-control?action=<allowlisted-id>` protocol.
 
-The dashboard resolves campaign state from `1-DM Toolkit/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is null.
+The dashboard resolves campaign state from `1-Campaign/DM/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is absent, null, malformed, or not a positive integer.
+
+The active session room is a separate, explicit plugin-local selection. Selecting it never writes Current State, chooses a lead, establishes chronology, or promotes a draft. The room name must match the selected folder basename so workflow filenames cannot escape the room.
+
+See [FEATURE_COVERAGE.md](FEATURE_COVERAGE.md) for the exact implementation status and ownership boundary of all fifty operating upgrades.
 
 ## Markdown controls
 
@@ -48,6 +56,26 @@ compact: true
 
 Only action IDs compiled into [`src/actions.ts`](src/actions.ts) are accepted. Unknown keys, duplicate keys, unknown actions, and empty action lists render as errors.
 
+## Operating workflow command IDs
+
+These IDs are stable hotkey and control-block targets. Obsidian prefixes command-palette IDs with `veiled-chicago-control-plane:`.
+
+- `open-live-edge-router`
+- `create-managed-note`
+- `capture-quick-inbox`
+- `set-active-session-room`
+- `open-active-session-control`
+- `scaffold-active-session-room`
+- `open-session-preflight`
+- `capture-player-declaration`
+- `generate-session-run`
+- `open-session-readiness`
+- `capture-live-event`
+- `open-promotion-review`
+- `propose-local-transcription`
+- `open-ai-context-policy`
+- `open-operations-health`
+
 ## Optional local automation companion
 
 Navigation, HTML surfaces, URI actions, and integrations work from the BRAT installation alone. Process actions additionally require the companion wrapper and the corresponding vault audit scripts.
@@ -55,23 +83,51 @@ Navigation, HTML surfaces, URI actions, and integrations work from the BRAT inst
 Copy [`companion/vcg_control.py`](companion/vcg_control.py) to this path inside the vault:
 
 ```text
-<vault>/scripts/vcg_control.py
+<vault>/9-System/Automation/scripts/vcg_control.py
 ```
 
 The plugin invokes only:
 
 ```text
-python3 scripts/vcg_control.py run <fixed-action-id> --json
+python3 9-System/Automation/scripts/vcg_control.py run <fixed-action-id> --json
 ```
 
 No shell is involved. The wrapper maintains a second allowlist, accepts no arbitrary command or path, redacts the vault root from stored output, and refuses to stop a map process it cannot prove it owns. The wrapper currently requires macOS/POSIX process tools; other desktop platforms retain the non-process features.
 
-Local automation is disabled by default. Start/stop actions require confirmation by default, and protocol-triggered scripts remain separately disabled unless explicitly enabled.
+Local automation is disabled by default. Start/stop actions require confirmation by default. Terminal and process actions are never protocol-safe and cannot run through `obsidian://vc-control`.
+
+## Vault hierarchy contract
+
+All paths are centralized in [`src/paths.ts`](src/paths.ts). The plugin targets only the live hierarchy:
+
+- `1-Campaign/DM`, `1-Campaign/Party`, `1-Campaign/Sessions`, and `1-Campaign/Handouts`
+- `2-World/Chicago`
+- `3-Library/Mechanics`, `3-Library/Modules/Chicago`, and `3-Library/Templates`
+- `9-System/Automation` and `9-System/Apps`
+
+Deleted legacy roots are not used as write fallbacks. This prevents a stale alias from recreating the pre-migration hierarchy.
+
+Managed mutation outputs are Markdown files below one of the four live roots only. Schema destinations are:
+
+- NPCs: `2-World/Chicago/People/NPCs`
+- Locations: `2-World/Chicago/Places`
+- Factions: `2-World/Chicago/Factions`
+- Items: `2-World/Chicago/Items`
+- Clues: `1-Campaign/DM/Operations Inbox/Clues`
+- Rulings: `1-Campaign/DM/Operations Inbox/Rulings`
+- Player knowledge: `1-Campaign/Party/Knowledge`
+- Research: `1-Campaign/DM/Operations Inbox/Research`
+- Corrections: `1-Campaign/DM/Operations Inbox/Corrections`
+
+Session rooms are direct children of `1-Campaign/Sessions`. Quick capture appends to `1-Campaign/DM/Operations Inbox/Quick Capture.md`.
 
 ## Security boundaries
 
 - Styling is presentation, not access control. Maintain player-safe material separately.
 - Note content cannot define executables, paths, URLs, or command arguments.
+- Reviewed mutations execute from the serialized preview snapshot plus one captured target baseline per operation. Execute stays disabled until every kind/hash/size/mtime baseline is captured and shown. All targets and parent paths are preflighted before mutation, and append content is checked again inside `Vault.process`. Existing create targets, changed targets, and missing append targets without a reviewed initializer fail closed.
+- The plugin blocks direct writes to Current State, Canon Decisions Log, Campaign State Ledger, and Current Leads.
+- The append rollback before-state is captured inside Obsidian's atomic `Vault.process`. Rollback restores only exact expected append results and trashes only created files whose current content exactly matches the reviewed write; concurrent changes are left intact and reported.
 - External application actions delegate only to compiled Obsidian command IDs or a validated loopback URL.
 - The plugin sends no telemetry and performs no background network requests.
 - Settings and capped recent results are stored in the plugin's local `data.json`; that file is intentionally excluded from git.
@@ -91,6 +147,10 @@ The repository keeps the production bundle checked in because BRAT installs rele
 ```bash
 node scripts/verify-release.mjs
 ```
+
+CI installs from `package-lock.json` with `npm ci`, runs the full verifier, and fails if the committed `main.js` differs from the source build.
+
+`feature-contract.json` mirrors the canonical `NAV-01` through `GOV-10` taxonomy and exposes owner, status, evidence, test, and gate fields for vault integration checks. The vault's `9-System/Docs/Vault Operations/upgrade-features.json` remains the overall authority.
 
 ## Release contract
 

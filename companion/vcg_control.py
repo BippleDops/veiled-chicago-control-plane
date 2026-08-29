@@ -25,8 +25,19 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 
-ROOT = Path(__file__).resolve().parent.parent
-MAP_ROOT = ROOT / "veiled-chicago-map"
+SCRIPT_PATH = Path(__file__).resolve()
+
+
+def _find_vault_root() -> Path:
+    for candidate in (SCRIPT_PATH.parent, *SCRIPT_PATH.parents):
+        if (candidate / ".obsidian").is_dir() and (candidate / "1-Campaign").is_dir():
+            return candidate
+    return SCRIPT_PATH.parent.parent
+
+
+ROOT = _find_vault_root()
+AUTOMATION_SCRIPTS = Path("9-System/Automation/scripts")
+MAP_ROOT = ROOT / "9-System/Apps/veiled-chicago-map"
 STATE_DIR = ROOT / ".tmp" / "vcg-control"
 STATE_PATH = STATE_DIR / "map-server.json"
 LOCK_PATH = STATE_DIR / "map-server.lock"
@@ -56,27 +67,23 @@ class CommandAction:
 COMMAND_ACTIONS: dict[str, CommandAction] = {
     "live-edge": CommandAction(
         "Check live-canon and player-choice boundaries.",
-        ("python3", "scripts/check_live_edge.py"),
+        ("python3", str(AUTOMATION_SCRIPTS / "check_live_edge.py")),
     ),
     "navigation": CommandAction(
         "Validate required operational routes and appearance state.",
-        ("python3", "scripts/vault_navigation_audit.py"),
+        ("python3", str(AUTOMATION_SCRIPTS / "vault_navigation_audit.py")),
     ),
     "links-live": CommandAction(
         "Validate live-scope internal links.",
-        ("python3", "scripts/vault_link_audit.py", "--live", "--strict"),
+        ("python3", str(AUTOMATION_SCRIPTS / "vault_link_audit.py"), "--live", "--strict"),
     ),
     "frontmatter-live": CommandAction(
         "Validate live-scope frontmatter.",
-        ("python3", "scripts/frontmatter_validator.py", "--scope", "live", "--strict"),
-    ),
-    "tactical-ready": CommandAction(
-        "Validate ready tactical-map contracts.",
-        ("python3", "scripts/tactical_map_coverage_audit.py", "--strict-ready"),
+        ("python3", str(AUTOMATION_SCRIPTS / "frontmatter_validator.py"), "--scope", "live", "--strict"),
     ),
     "css-audit": CommandAction(
         "Parse and audit the local Obsidian CSS system.",
-        ("python3", "scripts/audit_obsidian_css.py", "--json"),
+        ("python3", str(AUTOMATION_SCRIPTS / "audit_obsidian_css.py"), "--json"),
     ),
 }
 
@@ -336,7 +343,7 @@ def map_start() -> tuple[bool, int, str, str]:
     if not (MAP_ROOT / "package.json").is_file():
         return False, 4, f"Missing map package: {MAP_ROOT / 'package.json'}", ""
     if not (MAP_ROOT / "node_modules").is_dir():
-        return False, 4, "Map dependencies are not installed; run npm install in veiled-chicago-map first.", ""
+        return False, 4, "Map dependencies are not installed; run npm install in 9-System/Apps/veiled-chicago-map first.", ""
     npm = shutil.which("npm")
     if npm is None:
         return False, 4, "npm is not available on PATH.", ""

@@ -11,9 +11,11 @@ import {
   Setting,
   setIcon,
   TFile,
+  TFolder,
   WorkspaceLeaf
 } from "obsidian";
 import { execFile, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 
 import {
   ACTION_BY_ID,
@@ -24,22 +26,67 @@ import {
   type ActionGroup,
   type ControlAction
 } from "./actions";
+import {
+  buildDeclarationProposal,
+  buildEventProposal,
+  buildManagedNoteProposal,
+  buildQuickCaptureProposal,
+  buildRunProposal,
+  buildSessionRoomProposal,
+  buildTranscriptionRequestProposal,
+  CAPABILITY_POLICY,
+  contentMatchesExpected,
+  contentHash,
+  CONTEXT_PROFILES,
+  MANAGED_NOTE_SCHEMAS,
+  normalizeSessionDisplayName,
+  normalizeSessionRoomPath,
+  normalizeVaultPath,
+  parseExplicitNextSession,
+  resolveOperationMode,
+  targetMatchesBaseline,
+  validateControlResult,
+  validateReviewedProposal,
+  type ControlResult,
+  type ContextProfileId,
+  type MutationProposal,
+  type ReviewedMutationProposal
+} from "./operating";
+import {
+  ProposalReviewModal,
+  WorkflowFormModal,
+  type WorkflowField,
+  type WorkflowValues
+} from "./workflow-ui";
+import { sessionControlRoomPath, VAULT_PATHS } from "./paths";
 
 const VIEW_TYPE = "veiled-chicago-control-plane";
-const CURRENT_STATE_PATH = "1-DM Toolkit/Current State of Affairs.md";
-const CURRENT_LEADS_PATH = "1-Party/Current Leads.md";
-const GROUPS: readonly ActionGroup[] = ["Live operations", "World and maps", "Applications", "Automation"];
+const CURRENT_STATE_PATH = VAULT_PATHS.currentState;
+const CURRENT_LEADS_PATH = VAULT_PATHS.currentLeads;
+const GROUPS: readonly ActionGroup[] = [
+  "Live operations",
+  "Creation and session",
+  "AI and governance",
+  "World and maps",
+  "Applications",
+  "Automation"
+];
+const APPROVED_AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "ogg", "wav", "webm"]);
 
 interface ControlPlaneSettings {
   automationEnabled: boolean;
   autoProfiles: boolean;
   openNotesInNewTab: boolean;
   confirmScriptActions: boolean;
-  allowProtocolAutomation: boolean;
   mapUrl: string;
   scriptTimeoutSeconds: number;
   maxOutputCharacters: number;
+  activeSessionRoom: string | null;
+  activeSessionName: string | null;
+  activeContextProfile: ContextProfileId;
   recentRuns: RunRecord[];
+  recentTransactions: TransactionRecord[];
+  proposalReplayIds: string[];
 }
 
 interface RunRecord {
@@ -51,13 +98,13 @@ interface RunRecord {
   output: string;
 }
 
-interface ScriptPayload {
-  action: string;
+interface TransactionRecord {
+  id: string;
+  title: string;
   ok: boolean;
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-  duration_ms: number;
+  timestamp: string;
+  operationCount: number;
+  summary: string;
 }
 
 interface LiveState {
@@ -67,6 +114,14 @@ interface LiveState {
   deploymentMode: string;
   openLeadTasks: number;
   stateModified: number | null;
+  activeSessionRoom: string | null;
+  activeSessionName: string | null;
+}
+
+interface HealthCheck {
+  label: string;
+  state: "pass" | "attention" | "info";
+  detail: string;
 }
 
 interface Availability {
@@ -85,11 +140,15 @@ const DEFAULT_SETTINGS: ControlPlaneSettings = {
   autoProfiles: true,
   openNotesInNewTab: true,
   confirmScriptActions: true,
-  allowProtocolAutomation: false,
   mapUrl: "http://127.0.0.1:5173/",
   scriptTimeoutSeconds: 45,
   maxOutputCharacters: 12000,
-  recentRuns: []
+  activeSessionRoom: null,
+  activeSessionName: null,
+  activeContextProfile: "session-live",
+  recentRuns: [],
+  recentTransactions: [],
+  proposalReplayIds: []
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -155,6 +214,38 @@ function isRunRecord(value: unknown): value is RunRecord {
   );
 }
 
+function isTransactionRecord(value: unknown): value is TransactionRecord {
+  const record = asRecord(value);
+  return (
+    typeof record.id === "string" &&
+    typeof record.title === "string" &&
+    typeof record.ok === "boolean" &&
+    typeof record.timestamp === "string" &&
+    Number.isFinite(Date.parse(record.timestamp)) &&
+    typeof record.operationCount === "number" &&
+    Number.isInteger(record.operationCount) &&
+    record.operationCount >= 0 &&
+    typeof record.summary === "string"
+  );
+}
+
+function isContextProfileId(value: unknown): value is ContextProfileId {
+  return typeof value === "string" && CONTEXT_PROFILES.some((profile) => profile.id === value);
+}
+
+function stringValue(values: WorkflowValues, id: string): string {
+  const value = values[id];
+  return typeof value === "string" ? value : "";
+}
+
+function isEventStatus(value: string): value is "confirmed" | "contested" | "unknown" {
+  return value === "confirmed" || value === "contested" || value === "unknown";
+}
+
+function isAudience(value: string): value is "dm" | "players" | "both" {
+  return value === "dm" || value === "players" || value === "both";
+}
+
 class ConfirmActionModal extends Modal {
   constructor(
     app: App,
@@ -167,8 +258,13 @@ class ConfirmActionModal extends Modal {
 
   onOpen(): void {
     this.modalEl.addClass("vc-control-confirm-modal");
+    const titleId = `vcg-confirm-title-${crypto.randomUUID()}`;
+    const descriptionId = `vcg-confirm-description-${crypto.randomUUID()}`;
+    this.titleEl.id = titleId;
     this.titleEl.setText("Confirm local action");
-    this.contentEl.createEl("p", { text: this.message });
+    this.contentEl.createEl("p", { text: this.message, attr: { id: descriptionId } });
+    this.modalEl.setAttr("aria-labelledby", titleId);
+    this.modalEl.setAttr("aria-describedby", descriptionId);
     this.contentEl.createEl("p", {
       cls: "vc-control-confirm-note",
       text: "Only the named allowlisted action will run. No note content can supply a shell command."
@@ -233,8 +329,11 @@ class ControlPlaneView extends ItemView {
     const telemetry = header.createEl("dl", { cls: "vc-control-telemetry" });
     this.addMetric(telemetry, "Latest played", live.latestLabel);
     this.addMetric(telemetry, "Deployment", live.deploymentMode);
-    this.addMetric(telemetry, "Next session", live.nextSession === null ? "PLAYER SELECTED" : `SESSION ${live.nextSession}`);
+    this.addMetric(telemetry, "Next session", live.nextSession === null ? "NOT DECLARED" : `SESSION ${live.nextSession}`);
     this.addMetric(telemetry, "Open lead tasks", String(live.openLeadTasks));
+    this.addMetric(telemetry, "Active room", live.activeSessionName ?? "NOT SELECTED");
+
+    this.renderLiveEdgeRouter(contentEl, live);
 
     const toolbar = contentEl.createEl("nav", {
       cls: "vc-control-toolbar",
@@ -261,14 +360,51 @@ class ControlPlaneView extends ItemView {
     const main = contentEl.createEl("main", { cls: "vc-control-main" });
     for (const group of GROUPS) this.renderGroup(main, group);
 
+    this.renderContextPolicy(contentEl);
+    this.renderHealth(contentEl);
+    this.renderTransactions(contentEl);
     this.renderRecentRuns(contentEl);
     this.applyFilter(contentEl);
+  }
+
+  scrollToSection(section: string): void {
+    const target = this.contentEl.querySelector<HTMLElement>(`[data-vc-section="${section}"]`);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+    target?.focus({ preventScroll: true });
   }
 
   private addMetric(container: HTMLElement, label: string, value: string): void {
     const item = container.createDiv({ cls: "vc-control-metric" });
     item.createEl("dt", { text: label });
     item.createEl("dd", { text: value });
+  }
+
+  private renderLiveEdgeRouter(container: HTMLElement, live: LiveState): void {
+    const section = container.createEl("section", {
+      cls: "vc-control-router",
+      attr: { "data-vc-section": "live-edge", tabindex: "-1", "aria-label": "Live Edge Router" }
+    });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Live Edge Router" });
+    heading.createSpan({ text: "OBSERVE / NO INFERENCE" });
+    const grid = section.createDiv({ cls: "vc-control-router-grid" });
+    const facts = [
+      ["Latest played", live.latestLabel],
+      ["Player deployment", live.deploymentMode],
+      ["Current State next_session", live.nextSession === null ? "not declared as a positive integer" : String(live.nextSession)],
+      ["Explicit active room", live.activeSessionRoom ?? "not selected"]
+    ] as const;
+    for (const [label, value] of facts) {
+      const card = grid.createDiv({ cls: "vc-control-router-card" });
+      card.createEl("strong", { text: label });
+      card.createEl("span", { text: value });
+    }
+    const actions = section.createDiv({ cls: "vc-control-router-actions" });
+    for (const id of ["open-latest-played", "open-current-state", "open-current-leads", "set-active-session-room"]) {
+      const action = ACTION_BY_ID.get(id);
+      if (action) actions.appendChild(this.plugin.createActionButton(action, "view"));
+    }
   }
 
   private renderGroup(container: HTMLElement, group: ActionGroup): void {
@@ -311,6 +447,70 @@ class ControlPlaneView extends ItemView {
     }
   }
 
+  private renderContextPolicy(container: HTMLElement): void {
+    const section = container.createEl("section", {
+      cls: "vc-control-policy",
+      attr: { "data-vc-section": "ai-policy", tabindex: "-1", "aria-label": "AI context policy" }
+    });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "AI context and capability guardrails" });
+    heading.createSpan({ text: `${CAPABILITY_POLICY.aiWriteMode} / ${CAPABILITY_POLICY.canonPromotion}` });
+    const phases = section.createEl("ol", { cls: "vc-control-phase-list" });
+    for (const phase of ["observe", "propose", "execute"] as const) {
+      const item = phases.createEl("li");
+      item.createEl("strong", { text: phase.toUpperCase() });
+      item.createSpan({ text: CAPABILITY_POLICY[phase] });
+    }
+    const profiles = section.createDiv({ cls: "vc-control-profile-grid" });
+    for (const profile of CONTEXT_PROFILES) {
+      const card = profiles.createEl("button", { cls: "vc-control-profile" });
+      card.type = "button";
+      card.toggleClass("is-active", profile.id === this.plugin.settings.activeContextProfile);
+      card.setAttr("aria-pressed", String(profile.id === this.plugin.settings.activeContextProfile));
+      card.createEl("strong", { text: profile.title });
+      card.createEl("small", { text: "Guarded configuration; provider enforcement is not verified." });
+      card.createEl("span", { text: profile.description });
+      card.createEl("code", { text: `${profile.audiences.join("+")} / ${profile.retrievalScopes.join("+")}` });
+      this.plugin.registerDomEvent(card, "click", () => void this.plugin.setActiveContextProfile(profile.id));
+    }
+  }
+
+  private renderHealth(container: HTMLElement): void {
+    const section = container.createEl("section", {
+      cls: "vc-control-health",
+      attr: { "data-vc-section": "operations-health", tabindex: "-1", "aria-label": "Operations health" }
+    });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Operations health" });
+    heading.createSpan({ text: "LOCAL CAPABILITY CONTRACT" });
+    const list = section.createEl("ul", { cls: "vc-control-health-list" });
+    for (const check of this.plugin.getHealthChecks()) {
+      const item = list.createEl("li", { cls: `is-${check.state}` });
+      item.createEl("span", { cls: "vc-control-health-state", text: check.state.toUpperCase() });
+      item.createEl("strong", { text: check.label });
+      item.createSpan({ text: check.detail });
+    }
+  }
+
+  private renderTransactions(container: HTMLElement): void {
+    const section = container.createEl("section", { cls: "vc-control-transactions" });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Reviewed transactions" });
+    heading.createSpan({ text: "PLUGIN-LOCAL AUDIT RECEIPTS" });
+    if (this.plugin.settings.recentTransactions.length === 0) {
+      section.createEl("p", { cls: "vc-control-empty", text: "No reviewed mutation has executed yet." });
+      return;
+    }
+    const list = section.createEl("ol", { cls: "vc-control-transaction-list" });
+    for (const transaction of this.plugin.settings.recentTransactions) {
+      const item = list.createEl("li", { cls: transaction.ok ? "is-pass" : "is-fail" });
+      item.createEl("strong", { text: transaction.ok ? "APPLIED" : "ROLLED BACK" });
+      item.createSpan({ text: `${transaction.title} · ${transaction.operationCount} operation(s)` });
+      item.createEl("time", { text: new Date(transaction.timestamp).toLocaleString() });
+      item.createEl("code", { text: transaction.id });
+    }
+  }
+
   private applyFilter(container: HTMLElement): void {
     const query = this.filter.trim().toLowerCase();
     for (const button of container.querySelectorAll<HTMLElement>(".vc-control-action")) {
@@ -350,6 +550,40 @@ class ControlPlaneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Active AI context profile")
+      .setDesc("Retrieval policy contract only. Every profile remains read-only toward canonical owners.")
+      .addDropdown((dropdown) => {
+        for (const profile of CONTEXT_PROFILES) dropdown.addOption(profile.id, profile.title);
+        dropdown.setValue(this.plugin.settings.activeContextProfile).onChange(async (value) => {
+          if (!isContextProfileId(value)) return;
+          await this.plugin.setActiveContextProfile(value);
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Explicit active session room")
+      .setDesc(
+        this.plugin.settings.activeSessionRoom
+          ? `${this.plugin.settings.activeSessionName ?? "Session room"}: ${this.plugin.settings.activeSessionRoom}`
+          : "Not selected. The plugin will not infer a room from filenames or next_session."
+      )
+      .addButton((button) =>
+        button.setButtonText("Select").onClick(() => void this.plugin.executeAction("set-active-session-room", "command"))
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Clear")
+          .setDisabled(!this.plugin.settings.activeSessionRoom)
+          .onClick(async () => {
+            this.plugin.settings.activeSessionRoom = null;
+            this.plugin.settings.activeSessionName = null;
+            await this.plugin.saveSettings();
+            this.display();
+            await this.plugin.refreshViews();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Open notes in new tabs")
       .setDesc("Keep the control plane visible while opening campaign surfaces.")
       .addToggle((toggle) =>
@@ -376,16 +610,6 @@ class ControlPlaneSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.confirmScriptActions).onChange(async (value) => {
           this.plugin.settings.confirmScriptActions = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Allow automation from obsidian://vc-control")
-      .setDesc("Off by default. Navigation URI actions remain available; script actions are rejected unless this is enabled.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.allowProtocolAutomation).onChange(async (value) => {
-          this.plugin.settings.allowProtocolAutomation = value;
           await this.plugin.saveSettings();
         })
       );
@@ -429,6 +653,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private readonly insertedStateLabels = new Set<HTMLElement>();
   private readonly activeChildren = new Set<ChildProcess>();
   private readonly pendingConfirmationModals = new Set<ConfirmActionModal>();
+  private readonly pendingWorkflowModals = new Set<WorkflowFormModal>();
+  private readonly pendingProposalModals = new Set<ProposalReviewModal>();
+  private transactionInProgress = false;
   private refreshTimer: number | null = null;
   private statusButton: HTMLButtonElement | null = null;
   private unloading = false;
@@ -488,6 +715,10 @@ export default class VeiledChicagoControlPlane extends Plugin {
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     for (const modal of this.pendingConfirmationModals) modal.close();
     this.pendingConfirmationModals.clear();
+    for (const modal of this.pendingWorkflowModals) modal.close();
+    this.pendingWorkflowModals.clear();
+    for (const modal of this.pendingProposalModals) modal.close();
+    this.pendingProposalModals.clear();
     for (const child of this.activeChildren) {
       if (!child.killed) child.kill("SIGTERM");
     }
@@ -506,6 +737,21 @@ export default class VeiledChicagoControlPlane extends Plugin {
       Math.max(2000, Number(saved.maxOutputCharacters) || DEFAULT_SETTINGS.maxOutputCharacters)
     );
     const recentRuns = Array.isArray(saved.recentRuns) ? saved.recentRuns.filter(isRunRecord) : [];
+    const recentTransactions = Array.isArray(saved.recentTransactions)
+      ? saved.recentTransactions.filter(isTransactionRecord)
+      : [];
+    let activeSessionRoom: string | null = null;
+    let activeSessionName: string | null = null;
+    if (typeof saved.activeSessionRoom === "string") {
+      try {
+        activeSessionRoom = normalizeSessionRoomPath(saved.activeSessionRoom);
+        if (typeof saved.activeSessionName !== "string") throw new Error("Missing active session name.");
+        activeSessionName = normalizeSessionDisplayName(activeSessionRoom, saved.activeSessionName);
+      } catch {
+        activeSessionRoom = null;
+        activeSessionName = null;
+      }
+    }
     this.settings = {
       automationEnabled:
         typeof saved.automationEnabled === "boolean" ? saved.automationEnabled : DEFAULT_SETTINGS.automationEnabled,
@@ -516,17 +762,27 @@ export default class VeiledChicagoControlPlane extends Plugin {
         typeof saved.confirmScriptActions === "boolean"
           ? saved.confirmScriptActions
           : DEFAULT_SETTINGS.confirmScriptActions,
-      allowProtocolAutomation:
-        typeof saved.allowProtocolAutomation === "boolean"
-          ? saved.allowProtocolAutomation
-          : DEFAULT_SETTINGS.allowProtocolAutomation,
       mapUrl: typeof saved.mapUrl === "string" ? saved.mapUrl : DEFAULT_SETTINGS.mapUrl,
       scriptTimeoutSeconds: timeout,
       maxOutputCharacters: outputLimit,
+      activeSessionRoom,
+      activeSessionName,
+      activeContextProfile: isContextProfileId(saved.activeContextProfile)
+        ? saved.activeContextProfile
+        : DEFAULT_SETTINGS.activeContextProfile,
       recentRuns: recentRuns.slice(0, 8).map((run) => ({
         ...run,
         output: this.redactLocalOutput(run.output).slice(-outputLimit)
-      }))
+      })),
+      recentTransactions: recentTransactions.slice(0, 12),
+      proposalReplayIds: Array.isArray(saved.proposalReplayIds)
+        ? saved.proposalReplayIds
+            .filter(
+              (value): value is string =>
+                typeof value === "string" && /^vcg-[a-z-]+-\d+-[a-f0-9]{8}$/.test(value)
+            )
+            .slice(0, 256)
+        : []
     };
     if (!isSafeMapUrl(this.settings.mapUrl)) this.settings.mapUrl = DEFAULT_SETTINGS.mapUrl;
   }
@@ -535,13 +791,20 @@ export default class VeiledChicagoControlPlane extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async activateView(): Promise<void> {
+  async activateView(section?: string): Promise<void> {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
+    if (section && leaf.view instanceof ControlPlaneView) leaf.view.scrollToSection(section);
+  }
+
+  async setActiveContextProfile(profile: ContextProfileId): Promise<void> {
+    this.settings.activeContextProfile = profile;
+    await this.saveSettings();
+    await this.refreshViews();
   }
 
   async refreshViews(): Promise<void> {
@@ -566,11 +829,8 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const frontmatter = stateFile ? asRecord(this.app.metadataCache.getFileCache(stateFile)?.frontmatter) : {};
     const latestValue = frontmatter.last_played_record;
     const latestTarget = wikilinkTarget(latestValue);
-    const latestFile = latestTarget
-      ? this.app.metadataCache.getFirstLinkpathDest(latestTarget, CURRENT_STATE_PATH)
-      : this.findLatestPlayedFallback();
-    const nextValue = frontmatter.next_session;
-    const nextSession = typeof nextValue === "number" && Number.isInteger(nextValue) ? nextValue : null;
+    const latestFile = latestTarget ? this.app.metadataCache.getFirstLinkpathDest(latestTarget, CURRENT_STATE_PATH) : null;
+    const nextSession = parseExplicitNextSession(frontmatter.next_session);
 
     return {
       latestLabel: wikilinkLabel(latestValue) || latestFile?.basename || "UNRESOLVED",
@@ -578,17 +838,10 @@ export default class VeiledChicagoControlPlane extends Plugin {
       nextSession,
       deploymentMode: normalizeDeployment(frontmatter.deployment_mode),
       openLeadTasks: await this.countOpenTasks(CURRENT_LEADS_PATH),
-      stateModified: stateFile?.stat.mtime ?? null
+      stateModified: stateFile?.stat.mtime ?? null,
+      activeSessionRoom: this.settings.activeSessionRoom,
+      activeSessionName: this.settings.activeSessionName
     };
-  }
-
-  private findLatestPlayedFallback(): TFile | null {
-    return (
-      this.app.vault
-        .getMarkdownFiles()
-        .filter((file) => /^1-Session Journals\/Session \d+\/c1a-session-\d+\.md$/i.test(file.path))
-        .sort((left, right) => right.path.localeCompare(left.path, undefined, { numeric: true }))[0] ?? null
-    );
   }
 
   private async countOpenTasks(path: string): Promise<number> {
@@ -605,8 +858,11 @@ export default class VeiledChicagoControlPlane extends Plugin {
     button.dataset.action = action.id;
     button.dataset.search = `${action.id} ${action.title} ${action.description} ${action.group}`.toLowerCase();
     const availability = this.getAvailability(action);
-    button.disabled = !availability.available;
-    button.setAttribute("aria-label", `${action.title}. ${action.description}`);
+    button.setAttribute("aria-disabled", String(!availability.available));
+    button.setAttribute(
+      "aria-label",
+      `${action.title}. ${action.description}${availability.reason ? ` Unavailable: ${availability.reason}` : ""}`
+    );
     if (availability.reason) button.setAttribute("title", availability.reason);
 
     const icon = button.createSpan({ cls: "vc-control-action-icon" });
@@ -676,6 +932,13 @@ export default class VeiledChicagoControlPlane extends Plugin {
         return isSafeMapUrl(this.settings.mapUrl)
           ? { available: true, reason: "Custom Frame unavailable; opens the configured browser URL." }
           : { available: false, reason: "No valid integration URL or Custom Frame command." };
+      case "workflow":
+        if (["create-managed-note", "capture-quick-inbox", "set-active-session-room"].includes(action.id)) {
+          return { available: true };
+        }
+        return this.settings.activeSessionRoom && this.settings.activeSessionName
+          ? { available: true }
+          : { available: false, reason: "Select an explicit active session room first." };
       case "script":
         if (!this.settings.automationEnabled) return { available: false, reason: "Local automation is disabled in plugin settings." };
         if (!Platform.isMacOS) {
@@ -684,9 +947,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
         if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
           return { available: false, reason: "The vault has no local filesystem adapter." };
         }
-        return this.fileAt("scripts/vcg_control.py")
+        return this.fileAt(VAULT_PATHS.controlWrapper)
           ? { available: true }
-          : { available: false, reason: "Missing scripts/vcg_control.py." };
+          : { available: false, reason: `Missing ${VAULT_PATHS.controlWrapper}.` };
       case "external":
         return action.target && /^https?:\/\//i.test(action.target)
           ? { available: true }
@@ -730,7 +993,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
             new Notice(currentAvailability.reason ?? `${action.title} is unavailable.`);
             return;
           }
-          void this.performAction(action);
+          void this.performAction(action).catch((error: unknown) => this.reportActionError(action.title, error));
         },
         () => this.pendingConfirmationModals.delete(modal)
       );
@@ -738,13 +1001,22 @@ export default class VeiledChicagoControlPlane extends Plugin {
       modal.open();
       return;
     }
-    await this.performAction(action);
+    try {
+      await this.performAction(action);
+    } catch (error) {
+      this.reportActionError(action.title, error);
+    }
+  }
+
+  private reportActionError(title: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    new Notice(`${title}: ${message}`, 12000);
   }
 
   private async performAction(action: ControlAction): Promise<void> {
     switch (action.kind) {
       case "view":
-        await this.activateView();
+        await this.activateView(action.target);
         break;
       case "note":
         await this.openFile(this.fileAt(action.target ?? ""));
@@ -769,6 +1041,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
       case "external":
         if (action.target) openExternalUrl(action.target);
         break;
+      case "workflow":
+        await this.executeWorkflow(action.id);
+        break;
       case "script":
         await this.runScriptAction(action);
         break;
@@ -778,6 +1053,14 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private async openFile(file: TFile | null): Promise<void> {
     if (!file) {
       new Notice("The requested campaign note could not be resolved.");
+      return;
+    }
+    const existing = this.app.workspace.getLeavesOfType("markdown").find((leaf) => {
+      const view = leaf.view;
+      return view instanceof MarkdownView && view.file?.path === file.path;
+    });
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
       return;
     }
     const leaf = this.app.workspace.getLeaf(this.settings.openNotesInNewTab ? "tab" : false);
@@ -790,26 +1073,635 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const frontmatter = stateFile ? asRecord(this.app.metadataCache.getFileCache(stateFile)?.frontmatter) : {};
     if (target === "latest-played") {
       const link = wikilinkTarget(frontmatter.last_played_record);
-      const file = link ? this.app.metadataCache.getFirstLinkpathDest(link, CURRENT_STATE_PATH) : this.findLatestPlayedFallback();
+      const file = link ? this.app.metadataCache.getFirstLinkpathDest(link, CURRENT_STATE_PATH) : null;
       return file
         ? { file, available: { available: true } }
         : { file: null, available: { available: false, reason: "No latest played journal resolves from current state." } };
     }
     if (target === "next-session") {
-      const next = frontmatter.next_session;
-      if (typeof next !== "number" || !Number.isInteger(next)) {
+      const next = parseExplicitNextSession(frontmatter.next_session);
+      if (next === null) {
         return {
           file: null,
-          available: { available: false, reason: "next_session is null; player selection remains authoritative." }
+          available: { available: false, reason: "Current State has no valid positive-integer next_session declaration." }
         };
       }
-      const path = `1-Session Journals/Session ${next}/Session ${next} Control Room.md`;
+      const path = sessionControlRoomPath(next);
       const file = this.fileAt(path);
       return file
         ? { file, available: { available: true } }
         : { file: null, available: { available: false, reason: `Declared next session has no control room: ${path}` } };
     }
+    const active = this.activeSession();
+    const suffixes: Readonly<Record<string, string>> = {
+      "active-session-control": "Control Room",
+      "active-session-preflight": "Preflight",
+      "active-session-readiness": "Readiness Board",
+      "active-session-review": "Promotion Review"
+    };
+    const suffix = suffixes[target];
+    if (suffix) {
+      if (!active) {
+        return {
+          file: null,
+          available: { available: false, reason: "No explicit active session room is selected." }
+        };
+      }
+      const path = `${active.roomPath}/${active.displayName} ${suffix}.md`;
+      const file = this.fileAt(path);
+      return file
+        ? { file, available: { available: true } }
+        : { file: null, available: { available: false, reason: `Active room is missing ${suffix}: ${path}` } };
+    }
     return { file: null, available: { available: false, reason: `Unknown dynamic target: ${target}` } };
+  }
+
+  getHealthChecks(): HealthCheck[] {
+    const active = this.activeSession();
+    const fixedTools = [
+      ["Obsidian CLI", "/opt/homebrew/bin/obsidian"],
+      ["n8n", "/opt/homebrew/bin/n8n"],
+      ["ffmpeg", "/opt/homebrew/bin/ffmpeg"],
+      ["whisper-cli", "/opt/homebrew/bin/whisper-cli"]
+    ] as const;
+    const checks: HealthCheck[] = [
+      {
+        label: "Active session registry",
+        state: active ? "pass" : "attention",
+        detail: active ? `${active.displayName} · ${active.roomPath}` : "Not selected; filename inference remains disabled."
+      },
+      {
+        label: "AI mutation policy",
+        state: "info",
+        detail: "Plugin mutations are proposal-only; external AI/provider enforcement is not verified."
+      },
+      {
+        label: "Context profile",
+        state: "info",
+        detail: `${this.settings.activeContextProfile}; guarded configuration, not provider-enforced.`
+      },
+      {
+        label: "Ollama contract",
+        state: "info",
+        detail: "Expected at 127.0.0.1:11434; this plugin performs no background network probe."
+      },
+      {
+        label: "Automation wrapper",
+        state: this.fileAt(VAULT_PATHS.controlWrapper) ? "pass" : "attention",
+        detail: this.fileAt(VAULT_PATHS.controlWrapper)
+          ? "Fixed-action wrapper present."
+          : `${VAULT_PATHS.controlWrapper} is missing.`
+      }
+    ];
+    for (const [label, path] of fixedTools) {
+      checks.push({
+        label,
+        state: existsSync(path) ? "pass" : "attention",
+        detail: existsSync(path) ? `Available at ${path}.` : `Not found at reviewed path ${path}.`
+      });
+    }
+    checks.push({
+      label: "Whisper model",
+      state: existsSync(`${process.env.HOME ?? ""}/.cache/openwhispr/whisper-models/ggml-base.bin`) ? "pass" : "attention",
+      detail: "Transcription remains receipt-only until a separate reviewed runner is enabled."
+    });
+    return checks;
+  }
+
+  private activeSession(): { roomPath: string; displayName: string } | null {
+    if (!this.settings.activeSessionRoom || !this.settings.activeSessionName) return null;
+    return { roomPath: this.settings.activeSessionRoom, displayName: this.settings.activeSessionName };
+  }
+
+  private async executeWorkflow(id: string): Promise<void> {
+    switch (id) {
+      case "create-managed-note":
+        this.openManagedNoteWizard();
+        return;
+      case "capture-quick-inbox":
+        this.openQuickCapture();
+        return;
+      case "set-active-session-room":
+        this.openSessionRoomSelector();
+        return;
+      case "scaffold-active-session-room":
+        this.proposeSessionScaffold();
+        return;
+      case "capture-player-declaration":
+        this.openDeclarationCapture();
+        return;
+      case "generate-session-run":
+        await this.proposeSessionRun();
+        return;
+      case "capture-live-event":
+        this.openEventCapture();
+        return;
+      case "propose-local-transcription":
+        this.openTranscriptionRequest();
+        return;
+      default:
+        new Notice(`Unknown workflow action: ${id}`);
+    }
+  }
+
+  private openManagedNoteWizard(): void {
+    const options = Object.fromEntries(MANAGED_NOTE_SCHEMAS.map((schema) => [schema.id, schema.title]));
+    this.openWorkflowModal(
+      "Create managed note",
+      "Choose a schema and title. A second step collects required fields before an exact proposal is shown.",
+      [
+        { id: "schema", label: "Note type", type: "select", required: true, value: MANAGED_NOTE_SCHEMAS[0]?.id, options },
+        { id: "title", label: "Title", type: "text", required: true, placeholder: "Canonical display title" }
+      ],
+      "Continue",
+      (values) => {
+        const schemaId = stringValue(values, "schema");
+        const title = stringValue(values, "title");
+        const schema = MANAGED_NOTE_SCHEMAS.find((candidate) => candidate.id === schemaId);
+        if (!schema) throw new Error("The selected note schema is unavailable.");
+        window.setTimeout(() => {
+          if (this.unloading) return;
+          this.openWorkflowModal(
+            schema.title,
+            `${schema.description} The result remains draft/future until separately reviewed.`,
+            schema.fields.map((field) => ({
+              id: field.id,
+              label: field.label,
+              type: "text" as const,
+              required: field.required,
+              placeholder: field.placeholder,
+              value: field.defaultValue
+            })),
+            "Review proposal",
+            (fieldValues) => {
+              const proposal = buildManagedNoteProposal({
+                schemaId,
+                title,
+                fields: Object.fromEntries(
+                  Object.entries(fieldValues).map(([key, value]) => [key, typeof value === "string" ? value : String(value)])
+                ),
+                createdDate: this.today(),
+                proposalId: this.proposalId("note")
+              });
+              this.reviewProposal(proposal);
+            }
+          );
+        }, 0);
+      }
+    );
+  }
+
+  private openQuickCapture(): void {
+    this.openWorkflowModal(
+      "Quick capture",
+      "Capture goes to the operations inbox as a timestamped candidate, never directly to canon.",
+      [{ id: "text", label: "Capture", type: "textarea", required: true, placeholder: "Observation, question, correction, or idea" }],
+      "Review proposal",
+      (values) => {
+        this.reviewProposal(
+          buildQuickCaptureProposal({
+            text: stringValue(values, "text"),
+            timestamp: new Date().toISOString(),
+            proposalId: this.proposalId("capture")
+          })
+        );
+      }
+    );
+  }
+
+  private openSessionRoomSelector(): void {
+    const active = this.activeSession();
+    this.openWorkflowModal(
+      "Select active session room",
+      "This registry is plugin-local. It does not modify next_session, select a lead, establish chronology, or promote prep.",
+      [
+        {
+          id: "path",
+          label: "Vault-relative room path",
+          type: "text",
+          required: true,
+          placeholder: `${VAULT_PATHS.sessionsRoot}/Session 9`,
+          value: active?.roomPath ?? `${VAULT_PATHS.sessionsRoot}/`
+        },
+        {
+          id: "name",
+          label: "Display name",
+          type: "text",
+          required: true,
+          placeholder: "Session 9",
+          value: active?.displayName ?? ""
+        }
+      ],
+      "Select room",
+      async (values) => {
+        const roomPath = normalizeSessionRoomPath(stringValue(values, "path"));
+        const displayName = normalizeSessionDisplayName(roomPath, stringValue(values, "name"));
+        this.settings.activeSessionRoom = roomPath;
+        this.settings.activeSessionName = displayName;
+        await this.saveSettings();
+        await this.refreshViews();
+        new Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7000);
+      }
+    );
+  }
+
+  private proposeSessionScaffold(): void {
+    const active = this.requireActiveSession();
+    const proposal = buildSessionRoomProposal({
+      roomPath: active.roomPath,
+      displayName: active.displayName,
+      createdDate: this.today(),
+      proposalId: this.proposalId("room")
+    });
+    const operations = proposal.operations.filter((operation) => {
+      const existing = this.app.vault.getAbstractFileByPath(operation.path);
+      if (existing instanceof TFolder) throw new Error(`A folder blocks scaffold file: ${operation.path}`);
+      return !(existing instanceof TFile);
+    });
+    if (operations.length === 0) {
+      new Notice(`${active.displayName} already contains every scaffold file; nothing was proposed.`, 7000);
+      return;
+    }
+    this.reviewProposal({
+      ...proposal,
+      summary: `Create ${operations.length} missing draft workflow note(s) in ${active.roomPath}; existing files remain untouched.`,
+      operations
+    });
+  }
+
+  private openDeclarationCapture(): void {
+    const active = this.requireActiveSession();
+    this.openWorkflowModal(
+      "Record player declaration",
+      "Record exact player wording. Corrections append new evidence and do not replace the original.",
+      [
+        { id: "speaker", label: "Speaker / owner", type: "text", required: true, placeholder: "Player, PC, or table consensus" },
+        { id: "wording", label: "Verbatim wording", type: "textarea", required: true },
+        {
+          id: "disposition",
+          label: "Disposition",
+          type: "select",
+          required: true,
+          value: "accepted",
+          options: {
+            accepted: "Accepted",
+            combined: "Combined",
+            delegated: "Delegated",
+            deferred: "Deferred",
+            "player-named": "Player named"
+          }
+        }
+      ],
+      "Review evidence append",
+      (values) => {
+        this.reviewProposal(
+          buildDeclarationProposal({
+            roomPath: active.roomPath,
+            displayName: active.displayName,
+            wording: stringValue(values, "wording"),
+            speaker: stringValue(values, "speaker"),
+            disposition: stringValue(values, "disposition"),
+            timestamp: new Date().toISOString(),
+            proposalId: this.proposalId("declaration")
+          })
+        );
+      }
+    );
+  }
+
+  private async proposeSessionRun(): Promise<void> {
+    const active = this.requireActiveSession();
+    const intakePath = `${active.roomPath}/${active.displayName} Decision Intake.md`;
+    const intake = this.fileAt(intakePath);
+    if (!intake) throw new Error(`Decision Intake is missing: ${intakePath}`);
+    const declarationEvidence = await this.app.vault.cachedRead(intake);
+    const live = await this.readLiveState();
+    this.reviewProposal(
+      buildRunProposal({
+        roomPath: active.roomPath,
+        displayName: active.displayName,
+        declarationEvidence,
+        latestPlayedLabel: live.latestLabel,
+        createdDate: this.today(),
+        proposalId: this.proposalId("run")
+      })
+    );
+  }
+
+  private openEventCapture(): void {
+    const active = this.requireActiveSession();
+    this.openWorkflowModal(
+      "Capture live event",
+      "Events enter the append-only table log as sourced candidates. They do not update canonical owners.",
+      [
+        { id: "actor", label: "Actor", type: "text", required: true },
+        { id: "event", label: "Action or statement", type: "textarea", required: true },
+        { id: "evidence", label: "Witnesses / evidence", type: "text", required: false, placeholder: "Unknown is allowed" },
+        {
+          id: "status",
+          label: "Evidence status",
+          type: "select",
+          required: true,
+          value: "confirmed",
+          options: { confirmed: "Confirmed", contested: "Contested", unknown: "Unknown" }
+        },
+        {
+          id: "audience",
+          label: "Audience",
+          type: "select",
+          required: true,
+          value: "dm",
+          options: { dm: "DM", players: "Players", both: "Both" }
+        }
+      ],
+      "Review event append",
+      (values) => {
+        const status = stringValue(values, "status");
+        const audience = stringValue(values, "audience");
+        if (!isEventStatus(status)) throw new Error("Invalid event status.");
+        if (!isAudience(audience)) throw new Error("Invalid event audience.");
+        this.reviewProposal(
+          buildEventProposal({
+            roomPath: active.roomPath,
+            displayName: active.displayName,
+            actor: stringValue(values, "actor"),
+            event: stringValue(values, "event"),
+            evidence: stringValue(values, "evidence"),
+            status,
+            audience,
+            timestamp: new Date().toISOString(),
+            proposalId: this.proposalId("event")
+          })
+        );
+      }
+    );
+  }
+
+  private openTranscriptionRequest(): void {
+    const active = this.requireActiveSession();
+    const audioFiles = this.app.vault
+      .getFiles()
+      .filter((file) => APPROVED_AUDIO_EXTENSIONS.has(file.extension.toLowerCase()))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    if (audioFiles.length === 0) {
+      new Notice("No approved audio file exists in the vault. Nothing was selected or executed.", 8000);
+      return;
+    }
+    const options = Object.fromEntries(audioFiles.map((file) => [file.path, file.path]));
+    this.openWorkflowModal(
+      "Propose local transcription",
+      "Select a vault audio file and confirm consent. This release creates a receipt only; it does not launch whisper-cli.",
+      [
+        { id: "audio", label: "Audio file", type: "select", required: true, value: audioFiles[0]?.path, options },
+        { id: "consent", label: "Recording and transcription consent confirmed", type: "toggle", required: true, value: false },
+        { id: "retention", label: "Retention instruction", type: "text", required: true, placeholder: "Delete after reviewed transcript" }
+      ],
+      "Review request",
+      (values) => {
+        this.reviewProposal(
+          buildTranscriptionRequestProposal({
+            roomPath: active.roomPath,
+            displayName: active.displayName,
+            audioPath: stringValue(values, "audio"),
+            consentConfirmed: values.consent === true,
+            retention: stringValue(values, "retention"),
+            timestamp: new Date().toISOString(),
+            proposalId: this.proposalId("transcript")
+          })
+        );
+      }
+    );
+  }
+
+  private requireActiveSession(): { roomPath: string; displayName: string } {
+    const active = this.activeSession();
+    if (!active) throw new Error("Select an explicit active session room first.");
+    return active;
+  }
+
+  private reviewProposal(proposal: MutationProposal): void {
+    let modal: ProposalReviewModal;
+    modal = new ProposalReviewModal(
+      this.app,
+      proposal,
+      (reviewed) => this.executeReviewedProposal(reviewed),
+      () => this.pendingProposalModals.delete(modal)
+    );
+    this.pendingProposalModals.add(modal);
+    modal.open();
+  }
+
+  private openWorkflowModal(
+    heading: string,
+    description: string,
+    fields: readonly WorkflowField[],
+    submitLabel: string,
+    onSubmit: (values: WorkflowValues) => Promise<void> | void
+  ): void {
+    let modal: WorkflowFormModal;
+    modal = new WorkflowFormModal(
+      this.app,
+      heading,
+      description,
+      fields,
+      submitLabel,
+      onSubmit,
+      () => this.pendingWorkflowModals.delete(modal)
+    );
+    this.pendingWorkflowModals.add(modal);
+    modal.open();
+  }
+
+  private proposalId(kind: string): string {
+    return `vcg-${kind}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  private today(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  private async executeReviewedProposal(proposal: ReviewedMutationProposal): Promise<void> {
+    if (this.unloading) throw new Error("The plugin is unloading; transaction execution is blocked.");
+    validateReviewedProposal(proposal);
+    if (this.transactionInProgress) throw new Error("Another reviewed transaction is already in progress.");
+    this.transactionInProgress = true;
+    const createdFiles: Array<{ path: string; expected: string }> = [];
+    const appends: Array<{ path: string; before: string; expected: string }> = [];
+    try {
+      if (this.settings.proposalReplayIds.includes(proposal.id)) {
+        throw new Error(`Proposal ${proposal.id} has already executed or attempted execution; create a new proposal to retry.`);
+      }
+      const plan = await Promise.all(proposal.operations.map(async (operation, index) => {
+        this.preflightParentFolders(operation.path);
+        const baseline = proposal.targetBaselines[index];
+        if (!baseline) throw new Error(`Reviewed target baseline is missing: ${operation.path}`);
+        const target = this.app.vault.getAbstractFileByPath(operation.path);
+        const targetKind = target instanceof TFile ? "file" : target instanceof TFolder ? "folder" : "missing";
+        const contents = target instanceof TFile ? await this.app.vault.read(target) : null;
+        const mtime = target instanceof TFile ? target.stat.mtime : null;
+        const size = target instanceof TFile ? target.stat.size : null;
+        if (!targetMatchesBaseline(baseline, targetKind, contents, mtime, size)) {
+          throw new Error(`Target changed after preview: ${operation.path}`);
+        }
+        return { operation, baseline, mode: resolveOperationMode(operation, baseline.kind) };
+      }));
+      if (this.unloading) throw new Error("The plugin unloaded after transaction preflight.");
+      for (const item of plan) {
+        if (this.unloading) throw new Error("The plugin unloaded before all reviewed operations completed.");
+        await this.ensureParentFolders(item.operation.path);
+        if (this.unloading) throw new Error("The plugin unloaded before the next reviewed operation.");
+        if (item.mode === "create") {
+          if (this.app.vault.getAbstractFileByPath(item.operation.path)) {
+            throw new Error(`Reviewed create target changed after preflight: ${item.operation.path}`);
+          }
+          const contents =
+            item.operation.kind === "append"
+              ? `${item.operation.initialContents ?? ""}${item.operation.contents}`
+              : item.operation.contents;
+          await this.app.vault.create(item.operation.path, contents);
+          createdFiles.push({ path: item.operation.path, expected: contents });
+          continue;
+        }
+        const appendTarget = this.app.vault.getAbstractFileByPath(item.operation.path);
+        if (!(appendTarget instanceof TFile) || item.operation.kind !== "append") {
+          throw new Error(`Reviewed append target changed before execution: ${item.operation.path}`);
+        }
+        if (appendTarget.stat.mtime !== item.baseline.mtime || appendTarget.stat.size !== item.baseline.size) {
+          throw new Error(`Reviewed append metadata changed before execution: ${item.operation.path}`);
+        }
+        let before: string | null = null;
+        let expected: string | null = null;
+        let baselineMatched = false;
+        await this.app.vault.process(appendTarget, (current) => {
+          if (contentHash(current) !== item.baseline.contentHash) return current;
+          baselineMatched = true;
+          before = current;
+          expected = `${current}${item.operation.contents}`;
+          return expected;
+        });
+        if (!baselineMatched) {
+          throw new Error(`Reviewed append content changed before atomic write: ${item.operation.path}`);
+        }
+        if (before === null || expected === null) {
+          throw new Error(`Append baseline was not captured atomically: ${item.operation.path}`);
+        }
+        appends.push({ path: item.operation.path, before, expected });
+      }
+      if (this.unloading) throw new Error("The plugin unloaded before the transaction receipt was recorded.");
+      await this.recordTransaction(proposal, true);
+      new Notice(`${proposal.title}: applied ${plan.length} reviewed operation(s).`, 7000);
+    } catch (error) {
+      const rollbackErrors = await this.rollbackProposal(createdFiles, appends);
+      try {
+        await this.recordTransaction(proposal, false);
+      } catch (receiptError) {
+        rollbackErrors.push(
+          `transaction receipt could not be saved: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`
+        );
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const detail = rollbackErrors.length > 0 ? ` Rollback attention: ${rollbackErrors.join("; ")}` : " Rollback completed.";
+      throw new Error(`${message}.${detail}`);
+    } finally {
+      this.transactionInProgress = false;
+      if (!this.unloading) await this.refreshViews();
+    }
+  }
+
+  private preflightParentFolders(filePath: string): void {
+    const segments = normalizeVaultPath(filePath).split("/").slice(0, -1);
+    let current = "";
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment;
+      if (this.app.vault.getAbstractFileByPath(current) instanceof TFile) {
+        throw new Error(`A file blocks required folder: ${current}`);
+      }
+    }
+  }
+
+  private async ensureParentFolders(filePath: string): Promise<void> {
+    const segments = normalizeVaultPath(filePath).split("/").slice(0, -1);
+    let current = "";
+    for (const segment of segments) {
+      current = current ? `${current}/${segment}` : segment;
+      const existing = this.app.vault.getAbstractFileByPath(current);
+      if (existing instanceof TFile) throw new Error(`A file blocks required folder: ${current}`);
+      if (existing instanceof TFolder) continue;
+      await this.app.vault.createFolder(current);
+    }
+  }
+
+  private async rollbackProposal(
+    createdFiles: readonly { path: string; expected: string }[],
+    appends: readonly { path: string; before: string; expected: string }[]
+  ): Promise<string[]> {
+    const errors: string[] = [];
+    for (const append of [...appends].reverse()) {
+      const file = this.fileAt(append.path);
+      if (!file) {
+        errors.push(`append target disappeared: ${append.path}`);
+        continue;
+      }
+      try {
+        let restored = false;
+        await this.app.vault.process(file, (current) => {
+          if (!contentMatchesExpected(current, append.expected)) return current;
+          restored = true;
+          return append.before;
+        });
+        if (!restored) {
+          errors.push(`append target changed after write; left intact: ${append.path}`);
+        }
+      } catch (error) {
+        errors.push(`${append.path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const created of [...createdFiles].reverse()) {
+      const file = this.fileAt(created.path);
+      if (!file) continue;
+      try {
+        let unchanged = false;
+        await this.app.vault.process(file, (current) => {
+          unchanged = contentMatchesExpected(current, created.expected);
+          return current;
+        });
+        if (!unchanged) {
+          errors.push(`created target changed after write; left intact: ${created.path}`);
+          continue;
+        }
+        const verifiedMtime = file.stat.mtime;
+        const verifiedSize = file.stat.size;
+        const currentTarget = this.app.vault.getAbstractFileByPath(created.path);
+        if (currentTarget !== file || file.stat.mtime !== verifiedMtime || file.stat.size !== verifiedSize) {
+          errors.push(`created target identity changed before trash; left intact: ${created.path}`);
+          continue;
+        }
+        await this.app.fileManager.trashFile(file);
+      } catch (error) {
+        errors.push(`${created.path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return errors;
+  }
+
+  private async recordTransaction(proposal: MutationProposal, ok: boolean): Promise<void> {
+    const record: TransactionRecord = {
+      id: proposal.id,
+      title: proposal.title,
+      ok,
+      timestamp: new Date().toISOString(),
+      operationCount: proposal.operations.length,
+      summary: proposal.summary
+    };
+    this.settings.recentTransactions = [
+      record,
+      ...this.settings.recentTransactions.filter((candidate) => candidate.id !== proposal.id)
+    ].slice(0, 12);
+    this.settings.proposalReplayIds = [
+      proposal.id,
+      ...this.settings.proposalReplayIds.filter((candidate) => candidate !== proposal.id)
+    ].slice(0, 256);
+    await this.saveSettings();
   }
 
   private async runScriptAction(action: ControlAction): Promise<void> {
@@ -856,11 +1748,11 @@ export default class VeiledChicagoControlPlane extends Plugin {
     }
   }
 
-  private invokeControlWrapper(scriptId: string): Promise<ScriptPayload> {
+  private invokeControlWrapper(scriptId: string): Promise<ControlResult> {
     const adapter = this.app.vault.adapter;
     if (!(adapter instanceof FileSystemAdapter)) return Promise.reject(new Error("Local filesystem access is unavailable."));
     const root = adapter.getBasePath();
-    const scriptPath = `${root}/scripts/vcg_control.py`;
+    const scriptPath = `${root}/${VAULT_PATHS.controlWrapper}`;
 
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
@@ -892,21 +1784,12 @@ export default class VeiledChicagoControlPlane extends Plugin {
             return;
           }
           try {
-            const payload = JSON.parse(text) as ScriptPayload;
-            if (
-              typeof payload.action !== "string" ||
-              typeof payload.ok !== "boolean" ||
-              typeof payload.exit_code !== "number" ||
-              typeof payload.stdout !== "string" ||
-              typeof payload.stderr !== "string" ||
-              typeof payload.duration_ms !== "number"
-            ) {
-              throw new Error("Control wrapper returned an invalid payload shape.");
-            }
+            const payload = validateControlResult(JSON.parse(text), scriptId);
+            if (error && payload.ok) throw new Error("Control wrapper process error conflicts with a successful payload.");
             resolve(payload);
           } catch (parseError) {
             const detail = parseError instanceof Error ? parseError.message : String(parseError);
-            reject(new Error(`Could not parse control wrapper output: ${detail}`));
+            reject(new Error(`Could not parse or validate control wrapper output: ${detail}`));
           }
         }
       );
@@ -1065,10 +1948,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
     source: "view" | "block" | "command" | "protocol"
   ): string | null {
     if (source !== "protocol") return null;
-    if (action.kind === "script" && !this.settings.allowProtocolAutomation) {
-      return "Veiled Chicago Control Plane blocked protocol-triggered automation. Enable it explicitly in settings if required.";
-    }
-    if (action.kind !== "script" && !action.protocolSafe) {
+    if (!action.protocolSafe) {
       return "Veiled Chicago Control Plane blocked an action that is not protocol-safe.";
     }
     return null;
