@@ -1,6 +1,6 @@
 # Veiled Chicago Control Plane
 
-A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a semantic HTML dashboard, automatic workflow profiles, Markdown control blocks, native Obsidian commands, and a deliberately narrow local-automation bridge.
+A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, automatic workflow profiles, Markdown control blocks, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
 
 ## Install with BRAT
 
@@ -24,15 +24,18 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 
 ## What it does
 
-- Builds a responsive, semantic HTML campaign dashboard inside Obsidian.
-- Registers fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions.
+- Builds a responsive, semantic HTML application shell with Home, Session, Create, World, Tools, and System routes.
+- Registers 55 fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions while retaining all 44 version 1.1 IDs.
+- Provides native fuzzy command search, capped favorites and recents, bounded in-memory route history, and a persistent observed-context pane.
+- Provides a lazy, fixed-root entity navigator over cached frontmatter for NPCs, locations, factions, items, and session records; it does not read note bodies or claim semantic similarity.
 - Provides a dynamic Live Edge Router that reads explicit Current State and a separately selected active room without inferring chronology.
 - Creates schema-driven draft notes through preview-bound target baselines and a rollback-aware transaction broker.
 - Scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on declaration evidence, and routes promotion through human review.
 - Defines six guarded AI context configurations. They constrain this plugin's surfaces but do not claim provider-side retrieval enforcement.
 - Renders allowlisted `vcg-control` Markdown blocks; note content cannot supply commands, paths, arguments, or shell fragments.
 - Applies workflow profiles (`vcg-dashboard`, `vcg-session`, `vcg-dossier`, `vcg-data-deck`, `vcg-map-room`, and `vcg-handout`) from the active note's path and frontmatter without editing the note.
-- Integrates with installed Obsidian commands such as Dice Roller, Initiative Tracker, Custom Frames, Lean Terminal, Meta Bind, and Local REST API when those plugins are present.
+- Integrates through compiled command IDs with Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, Custom Frames, and Lean Terminal when those capabilities are present.
+- Opens native Sessions, NPC, Location, and Operational Review Queue Bases through fixed vault paths.
 - Exposes navigation through the `obsidian://vc-control?action=<allowlisted-id>` protocol.
 
 The dashboard resolves campaign state from `1-Campaign/DM/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is absent, null, malformed, or not a positive integer.
@@ -61,6 +64,8 @@ Only action IDs compiled into [`src/actions.ts`](src/actions.ts) are accepted. U
 These IDs are stable hotkey and control-block targets. Obsidian prefixes command-palette IDs with `veiled-chicago-control-plane:`.
 
 - `open-live-edge-router`
+- `open-command-search`
+- `open-entity-navigator`
 - `create-managed-note`
 - `capture-quick-inbox`
 - `set-active-session-room`
@@ -73,6 +78,7 @@ These IDs are stable hotkey and control-block targets. Obsidian prefixes command
 - `capture-live-event`
 - `open-promotion-review`
 - `propose-local-transcription`
+- `start-audio-recorder`
 - `open-ai-context-policy`
 - `open-operations-health`
 

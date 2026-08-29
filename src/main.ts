@@ -1,5 +1,6 @@
 import {
   App,
+  FileView,
   FileSystemAdapter,
   ItemView,
   MarkdownView,
@@ -23,9 +24,29 @@ import {
   MANAGED_PROFILE_CLASSES,
   parseControlBlock,
   profilesForPath,
-  type ActionGroup,
   type ControlAction
 } from "./actions";
+import { ControlActionSearchModal } from "./command-search";
+import {
+  buildEntityIndex,
+  deriveEntityType,
+  ENTITY_ROOT_REGISTRY,
+  ENTITY_TYPES,
+  filterEntityIndex,
+  type EntityIndexEntry,
+  type EntityType
+} from "./entity-navigator";
+import {
+  isCanonicalIsoTimestamp,
+  isPrimaryRoute,
+  normalizeFavoriteActionIds,
+  normalizeRecentActions,
+  ROUTE_DEFINITIONS,
+  routeForLegacySection,
+  RouteHistory,
+  type PrimaryRoute,
+  type RecentActionRecord
+} from "./navigation";
 import {
   buildDeclarationProposal,
   buildEventProposal,
@@ -63,14 +84,6 @@ import { sessionControlRoomPath, VAULT_PATHS } from "./paths";
 const VIEW_TYPE = "veiled-chicago-control-plane";
 const CURRENT_STATE_PATH = VAULT_PATHS.currentState;
 const CURRENT_LEADS_PATH = VAULT_PATHS.currentLeads;
-const GROUPS: readonly ActionGroup[] = [
-  "Live operations",
-  "Creation and session",
-  "AI and governance",
-  "World and maps",
-  "Applications",
-  "Automation"
-];
 const APPROVED_AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "ogg", "wav", "webm"]);
 
 interface ControlPlaneSettings {
@@ -84,6 +97,9 @@ interface ControlPlaneSettings {
   activeSessionRoom: string | null;
   activeSessionName: string | null;
   activeContextProfile: ContextProfileId;
+  activeRoute: PrimaryRoute;
+  favoriteActionIds: string[];
+  recentActions: RecentActionRecord[];
   recentRuns: RunRecord[];
   recentTransactions: TransactionRecord[];
   proposalReplayIds: string[];
@@ -146,6 +162,9 @@ const DEFAULT_SETTINGS: ControlPlaneSettings = {
   activeSessionRoom: null,
   activeSessionName: null,
   activeContextProfile: "session-live",
+  activeRoute: "home",
+  favoriteActionIds: [],
+  recentActions: [],
   recentRuns: [],
   recentTransactions: [],
   proposalReplayIds: []
@@ -205,8 +224,7 @@ function isRunRecord(value: unknown): value is RunRecord {
     ACTION_BY_ID.has(record.actionId) &&
     typeof record.title === "string" &&
     typeof record.ok === "boolean" &&
-    typeof record.timestamp === "string" &&
-    Number.isFinite(Date.parse(record.timestamp)) &&
+    isCanonicalIsoTimestamp(record.timestamp) &&
     typeof record.durationMs === "number" &&
     Number.isFinite(record.durationMs) &&
     record.durationMs >= 0 &&
@@ -220,8 +238,7 @@ function isTransactionRecord(value: unknown): value is TransactionRecord {
     typeof record.id === "string" &&
     typeof record.title === "string" &&
     typeof record.ok === "boolean" &&
-    typeof record.timestamp === "string" &&
-    Number.isFinite(Date.parse(record.timestamp)) &&
+    isCanonicalIsoTimestamp(record.timestamp) &&
     typeof record.operationCount === "number" &&
     Number.isInteger(record.operationCount) &&
     record.operationCount >= 0 &&
@@ -246,12 +263,32 @@ function isAudience(value: string): value is "dm" | "players" | "both" {
   return value === "dm" || value === "players" || value === "both";
 }
 
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function successfulActionReceipt(action: ControlAction): { readonly label: string; readonly announcement: string } {
+  switch (action.kind) {
+    case "script":
+      return { label: "SUCCESS", announcement: "completed" };
+    case "command":
+    case "integration":
+    case "external":
+      return { label: "DISPATCHED", announcement: "adapter dispatched" };
+    default:
+      return { label: "OPENED", announcement: "opened" };
+  }
+}
+
 class ConfirmActionModal extends Modal {
+  private confirmed = false;
+
   constructor(
     app: App,
     private readonly message: string,
     private readonly onConfirm: () => void,
-    private readonly onDismiss: () => void
+    private readonly onDismiss: (confirmed: boolean) => void
   ) {
     super(app);
   }
@@ -276,6 +313,7 @@ class ConfirmActionModal extends Modal {
     const confirm = footer.createEl("button", { cls: "mod-cta", text: "Run action" });
     confirm.type = "button";
     confirm.addEventListener("click", () => {
+      this.confirmed = true;
       this.close();
       this.onConfirm();
     });
@@ -283,16 +321,55 @@ class ConfirmActionModal extends Modal {
   }
 
   onClose(): void {
-    this.onDismiss();
+    this.onDismiss(this.confirmed);
     this.contentEl.empty();
   }
 }
 
 class ControlPlaneView extends ItemView {
-  private filter = "";
+  private readonly instanceId = crypto.randomUUID().slice(0, 8);
+  private readonly routeHistory: RouteHistory;
+  private liveRegion: HTMLElement | null = null;
+  private contextTrigger: HTMLButtonElement | null = null;
+  private contextOpen = false;
+  private moreOpen = false;
+  private entityQuery = "";
+  private entityType: EntityType | "" = "";
+  private entityStatus = "";
+  private renderGeneration = 0;
+  private contextResizeObserver: ResizeObserver | null = null;
+  private readonly handleKeydown = (event: KeyboardEvent): void => {
+    if (event.key === "Tab" && this.contextOpen && this.trapContextFocus(event)) return;
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      this.openCommandSearch(event.target instanceof HTMLElement ? event.target : null);
+      return;
+    }
+    if (event.altKey && !event.metaKey && !event.ctrlKey && event.key === "ArrowLeft") {
+      if (isEditableEventTarget(event.target)) return;
+      event.preventDefault();
+      const route = this.routeHistory.back();
+      if (!route) return;
+      void this.navigate(route, false);
+      return;
+    }
+    if (event.altKey && !event.metaKey && !event.ctrlKey && event.key === "ArrowRight") {
+      if (isEditableEventTarget(event.target)) return;
+      event.preventDefault();
+      const route = this.routeHistory.forward();
+      if (!route) return;
+      void this.navigate(route, false);
+      return;
+    }
+    if (event.key === "Escape" && this.contextOpen) {
+      event.preventDefault();
+      this.closeContext(true);
+    }
+  };
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: VeiledChicagoControlPlane) {
     super(leaf);
+    this.routeHistory = new RouteHistory(plugin.settings.activeRoute);
   }
 
   getViewType(): string {
@@ -308,76 +385,396 @@ class ControlPlaneView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.contentEl.addEventListener("keydown", this.handleKeydown);
     await this.render();
+    this.contextResizeObserver = new ResizeObserver(() => this.reconcileContextPresentation());
+    this.contextResizeObserver.observe(this.contentEl);
   }
 
-  async render(): Promise<void> {
+  async onClose(): Promise<void> {
+    this.contentEl.removeEventListener("keydown", this.handleKeydown);
+    this.contextResizeObserver?.disconnect();
+    this.contextResizeObserver = null;
+  }
+
+  async render(announcement?: string): Promise<void> {
+    const generation = ++this.renderGeneration;
     const { contentEl } = this;
+    const activeElement = document.activeElement;
+    const focusKey =
+      activeElement instanceof HTMLElement && contentEl.contains(activeElement)
+        ? activeElement.dataset.vcFocus ?? null
+        : null;
+    const scrollTop = contentEl.scrollTop;
+    const persistentLiveRegion = this.liveRegion ?? document.createElement("div");
+    persistentLiveRegion.className = "vc-control-live-region";
+    persistentLiveRegion.setAttribute("aria-live", "polite");
+    persistentLiveRegion.setAttribute("aria-atomic", "true");
+    persistentLiveRegion.remove();
+    this.liveRegion = persistentLiveRegion;
+    if (this.routeHistory.current !== this.plugin.settings.activeRoute) {
+      this.routeHistory.push(this.plugin.settings.activeRoute);
+    }
+    const live = await this.plugin.readLiveState();
+    if (generation !== this.renderGeneration) return;
     contentEl.empty();
     contentEl.addClass("vc-control-plane");
     contentEl.setAttr("aria-label", "Veiled Chicago campaign control plane");
+    const route = ROUTE_DEFINITIONS.find((candidate) => candidate.id === this.plugin.settings.activeRoute) ?? ROUTE_DEFINITIONS[0];
+    if (!route) return;
 
-    const live = await this.plugin.readLiveState();
-    const header = contentEl.createEl("header", { cls: "vc-control-hero" });
-    const identity = header.createDiv({ cls: "vc-control-identity" });
-    identity.createDiv({ cls: "vc-control-eyebrow", text: "VEILED CHICAGO / LOCAL CONTROL PLANE" });
-    identity.createEl("h1", { text: "Campaign systems online" });
-    identity.createEl("p", {
-      text: "A live HTML surface over canonical notes, installed plugins, and explicit local automation."
+    const shell = contentEl.createDiv({ cls: "vc-control-shell" });
+    const mainId = `vc-control-route-main-${this.instanceId}`;
+    const skip = shell.createEl("a", { cls: "vc-control-skip-link", text: "Skip to route content", href: `#${mainId}` });
+    skip.dataset.vcFocus = "skip-link";
+    skip.addEventListener("click", () => {
+      window.setTimeout(() => this.focusRouteHeading(), 0);
     });
 
-    const telemetry = header.createEl("dl", { cls: "vc-control-telemetry" });
-    this.addMetric(telemetry, "Latest played", live.latestLabel);
-    this.addMetric(telemetry, "Deployment", live.deploymentMode);
-    this.addMetric(telemetry, "Next session", live.nextSession === null ? "NOT DECLARED" : `SESSION ${live.nextSession}`);
-    this.addMetric(telemetry, "Open lead tasks", String(live.openLeadTasks));
-    this.addMetric(telemetry, "Active room", live.activeSessionName ?? "NOT SELECTED");
+    const appHeader = shell.createEl("header", { cls: "vc-control-app-header" });
+    const brand = appHeader.createDiv({ cls: "vc-control-brand" });
+    brand.createEl("h1", { text: "Veiled Chicago" });
+    brand.createEl("p", { text: "Local campaign control plane / observed state only" });
+    const commandTrigger = appHeader.createEl("button", { cls: "vc-control-command-trigger" });
+    commandTrigger.type = "button";
+    commandTrigger.dataset.vcFocus = "command-search";
+    const commandIcon = commandTrigger.createSpan();
+    commandIcon.setAttr("aria-hidden", "true");
+    setIcon(commandIcon, "search");
+    commandTrigger.createSpan({ text: "Search actions" });
+    commandTrigger.createEl("kbd", { text: Platform.isMacOS ? "⌘ K" : "Ctrl K" });
+    commandTrigger.addEventListener("click", () => this.openCommandSearch(commandTrigger));
 
-    this.renderLiveEdgeRouter(contentEl, live);
+    const grid = shell.createDiv({ cls: "vc-control-shell-grid" });
+    this.renderRouteNavigation(grid, route.id);
+    const main = grid.createEl("main", { cls: "vc-control-route-main", attr: { id: mainId } });
+    const routeHeader = main.createEl("header", { cls: "vc-control-route-header" });
+    const routeCopy = routeHeader.createDiv();
+    routeCopy.createEl("h2", {
+      text: route.label,
+      attr: { id: `vc-control-route-heading-${this.instanceId}`, tabindex: "-1" }
+    }).dataset.vcFocus = `route-heading-${route.id}`;
+    routeCopy.createEl("p", { text: route.description });
+    this.contextTrigger = routeHeader.createEl("button", { cls: "vc-control-context-toggle" });
+    this.contextTrigger.type = "button";
+    this.contextTrigger.dataset.vcFocus = "context-toggle";
+    this.contextTrigger.setAttr("aria-label", "Open observed context");
+    this.contextTrigger.setAttr("aria-expanded", String(this.contextOpen));
+    this.contextTrigger.setAttr("aria-controls", `vc-control-context-${this.instanceId}`);
+    const contextIcon = this.contextTrigger.createSpan();
+    contextIcon.setAttr("aria-hidden", "true");
+    setIcon(contextIcon, "panel-right-open");
+    this.contextTrigger.addEventListener("click", () => this.openContext());
 
-    const toolbar = contentEl.createEl("nav", {
-      cls: "vc-control-toolbar",
-      attr: { "aria-label": "Control plane filters and primary actions" }
-    });
-    const filterLabel = toolbar.createEl("label", { cls: "vc-control-filter" });
-    filterLabel.createSpan({ text: "Filter controls" });
-    const filterInput = filterLabel.createEl("input", {
-      type: "search",
-      placeholder: "Search actions…",
-      value: this.filter
-    });
-    filterInput.addEventListener("input", () => {
-      this.filter = filterInput.value;
-      this.applyFilter(contentEl);
-    });
-    const refresh = toolbar.createEl("button", { cls: "vc-control-icon-button" });
-    refresh.type = "button";
-    refresh.setAttr("aria-label", "Refresh control plane state");
-    refresh.setAttr("title", "Refresh control plane state");
-    setIcon(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => void this.render());
+    this.renderRoute(main, route.id, live);
+    this.renderContext(grid, live);
+    this.renderBottomNavigation(shell, route.id);
+    shell.appendChild(persistentLiveRegion);
 
-    const main = contentEl.createEl("main", { cls: "vc-control-main" });
-    for (const group of GROUPS) this.renderGroup(main, group);
-
-    this.renderContextPolicy(contentEl);
-    this.renderHealth(contentEl);
-    this.renderTransactions(contentEl);
-    this.renderRecentRuns(contentEl);
-    this.applyFilter(contentEl);
+    contentEl.scrollTop = scrollTop;
+    if (focusKey) this.restoreFocus(focusKey);
+    if (announcement) this.announce(announcement);
   }
 
-  scrollToSection(section: string): void {
-    const target = this.contentEl.querySelector<HTMLElement>(`[data-vc-section="${section}"]`);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    target?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
-    target?.focus({ preventScroll: true });
+  async navigateTo(section?: string): Promise<void> {
+    if (section === "command-search") {
+      const active = document.activeElement;
+      const opener =
+        active instanceof HTMLElement && this.contentEl.contains(active)
+          ? active
+          : this.contentEl.querySelector<HTMLElement>('[data-vc-focus="command-search"]') ??
+            this.contentEl.querySelector<HTMLElement>(`#vc-control-route-heading-${this.instanceId}`);
+      this.openCommandSearch(opener);
+      return;
+    }
+    const target = section === "entity-navigator" ? { route: "world" as const, focusTarget: "entity-navigator" as const } : routeForLegacySection(section ?? this.plugin.settings.activeRoute);
+    if (!target) return;
+    await this.navigate(target.route, true, target.focusTarget);
+  }
+
+  announce(message: string): void {
+    const region = this.liveRegion;
+    if (!region) return;
+    region.setText("");
+    window.setTimeout(() => {
+      if (region.isConnected) region.setText(message);
+    }, 0);
+  }
+
+  private renderRouteNavigation(container: HTMLElement, activeRoute: PrimaryRoute): void {
+    const nav = container.createEl("nav", {
+      cls: "vc-control-route-nav",
+      attr: { "aria-label": "Control plane routes" }
+    });
+    const list = nav.createEl("ul", { cls: "vc-control-route-nav-list" });
+    for (const route of ROUTE_DEFINITIONS) {
+      const item = list.createEl("li");
+      const button = item.createEl("button", { cls: "vc-control-route-nav-button" });
+      button.type = "button";
+      button.dataset.vcFocus = `route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      const icon = button.createSpan({ cls: "vc-control-route-nav-icon" });
+      icon.setAttr("aria-hidden", "true");
+      setIcon(icon, route.icon);
+      button.createSpan({ cls: "vc-control-route-nav-label", text: route.label });
+      button.createSpan({
+        cls: "vc-control-route-count",
+        text: String(CONTROL_ACTIONS.filter((action) => action.route === route.id).length)
+      });
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+  }
+
+  private renderBottomNavigation(container: HTMLElement, activeRoute: PrimaryRoute): void {
+    const nav = container.createEl("nav", {
+      cls: "vc-control-bottom-nav",
+      attr: { "aria-label": "Mobile control plane routes" }
+    });
+    const list = nav.createEl("ul", { cls: "vc-control-bottom-nav-list" });
+    for (const route of ROUTE_DEFINITIONS.filter((candidate) => candidate.mobilePrimary)) {
+      const item = list.createEl("li");
+      const button = item.createEl("button");
+      button.type = "button";
+      button.dataset.vcFocus = `mobile-route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      const icon = button.createSpan();
+      icon.setAttr("aria-hidden", "true");
+      setIcon(icon, route.icon);
+      button.createSpan({ text: route.mobileLabel });
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+
+    const moreItem = list.createEl("li");
+    const more = moreItem.createEl("button");
+    more.type = "button";
+    more.dataset.vcFocus = "mobile-more";
+    more.setAttr("aria-expanded", String(this.moreOpen));
+    more.setAttr("aria-controls", `vc-control-more-${this.instanceId}`);
+    if (activeRoute === "tools" || activeRoute === "system") more.setAttr("aria-current", "page");
+    const moreIcon = more.createSpan();
+    moreIcon.setAttr("aria-hidden", "true");
+    setIcon(moreIcon, "ellipsis");
+    more.createSpan({ text: "More" });
+    more.addEventListener("click", () => {
+      this.moreOpen = !this.moreOpen;
+      const panel = this.contentEl.querySelector<HTMLElement>(`#vc-control-more-${this.instanceId}`);
+      panel?.toggleClass("is-open", this.moreOpen);
+      panel?.setAttr("data-open", String(this.moreOpen));
+      more.setAttr("aria-expanded", String(this.moreOpen));
+    });
+
+    const panel = nav.createDiv({
+      cls: `vc-control-more-panel${this.moreOpen ? " is-open" : ""}`,
+      attr: { id: `vc-control-more-${this.instanceId}`, "data-open": String(this.moreOpen) }
+    });
+    for (const route of ROUTE_DEFINITIONS.filter((candidate) => !candidate.mobilePrimary)) {
+      const button = panel.createEl("button", { text: route.label });
+      button.type = "button";
+      button.dataset.vcFocus = `more-route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+  }
+
+  private renderRoute(container: HTMLElement, route: PrimaryRoute, live: LiveState): void {
+    switch (route) {
+      case "home":
+        this.renderLiveSummary(container, live);
+        this.renderLiveEdgeRouter(container, live);
+        this.renderFavorites(container);
+        this.renderRecentActions(container, 5);
+        this.renderRouteActions(container, route, new Set([
+          "open-latest-played",
+          "open-current-state",
+          "open-current-leads"
+        ]));
+        return;
+      case "world":
+        this.renderEntityNavigator(container);
+        this.renderRouteActions(container, route);
+        return;
+      case "system":
+        this.renderRouteActions(container, route);
+        this.renderCapabilityInventory(container);
+        this.renderContextPolicy(container);
+        this.renderHealth(container);
+        this.renderRecentActions(container, 20);
+        this.renderTransactions(container);
+        this.renderRecentRuns(container);
+        return;
+      default:
+        this.renderRouteActions(container, route);
+    }
+  }
+
+  private renderContext(container: HTMLElement, live: LiveState): void {
+    const scrim = container.createDiv({
+      cls: `vc-control-context-scrim${this.contextOpen ? " is-open" : ""}`,
+      attr: { "data-open": String(this.contextOpen), "aria-hidden": "true" }
+    });
+    scrim.addEventListener("click", () => this.closeContext(true));
+
+    const aside = container.createEl("aside", {
+      cls: `vc-control-context${this.contextOpen ? " is-open" : ""}`,
+      attr: {
+        id: `vc-control-context-${this.instanceId}`,
+        "data-open": String(this.contextOpen),
+        "aria-label": "Observed campaign context",
+        role: this.contextOpen ? "dialog" : "complementary",
+        ...(this.contextOpen ? { "aria-modal": "true" } : {})
+      }
+    });
+    const header = aside.createEl("header");
+    header.createEl("h2", { text: "Observed context" });
+    const close = header.createEl("button", { cls: "vc-control-context-close" });
+    close.type = "button";
+    close.dataset.vcFocus = "context-close";
+    close.setAttr("aria-label", "Close observed context");
+    const closeIcon = close.createSpan();
+    closeIcon.setAttr("aria-hidden", "true");
+    setIcon(closeIcon, "x");
+    close.addEventListener("click", () => this.closeContext(true));
+
+    const truth = aside.createEl("section", { cls: "vc-control-context-section" });
+    truth.createEl("h3", { text: "Live truth" });
+    const truthList = truth.createEl("dl");
+    this.addMetric(truthList, "Latest", live.latestLabel);
+    this.addMetric(truthList, "Deployment", live.deploymentMode);
+    this.addMetric(truthList, "Next", live.nextSession === null ? "Not declared" : `Session ${live.nextSession}`);
+    this.addMetric(truthList, "Lead tasks", String(live.openLeadTasks));
+
+    const room = aside.createEl("section", { cls: "vc-control-context-section" });
+    room.createEl("h3", { text: "Explicit active room" });
+    room.createEl("strong", { text: live.activeSessionName ?? "Not selected" });
+    room.createEl("code", { text: live.activeSessionRoom ?? "No plugin-local room is active." });
+
+    const policy = aside.createEl("section", { cls: "vc-control-context-section" });
+    policy.createEl("h3", { text: "Guardrails" });
+    policy.createEl("p", {
+      text: `${this.plugin.settings.activeContextProfile}; ${CAPABILITY_POLICY.aiWriteMode}; ${CAPABILITY_POLICY.canonPromotion}.`
+    });
+  }
+
+  private async navigate(route: PrimaryRoute, pushHistory = true, focusTarget?: string): Promise<void> {
+    if (pushHistory) this.routeHistory.push(route);
+    this.contextOpen = false;
+    this.moreOpen = false;
+    await this.plugin.setActiveRoute(route);
+    const target = focusTarget
+      ? this.contentEl.querySelector<HTMLElement>(`[data-vc-section="${focusTarget}"]`)
+      : null;
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+      target.focus({ preventScroll: true });
+    } else {
+      this.contentEl.scrollTop = 0;
+      this.focusRouteHeading();
+    }
+    const definition = ROUTE_DEFINITIONS.find((candidate) => candidate.id === route);
+    this.announce(`${definition?.label ?? route} route opened.`);
+  }
+
+  private openCommandSearch(opener: HTMLElement | null): void {
+    this.announce("Command search opened.");
+    this.plugin.openCommandSearch(opener, (message) => this.announce(message));
+  }
+
+  private openContext(): void {
+    this.contextOpen = true;
+    const aside = this.contentEl.querySelector<HTMLElement>(`#vc-control-context-${this.instanceId}`);
+    const scrim = this.contentEl.querySelector<HTMLElement>(".vc-control-context-scrim");
+    aside?.addClass("is-open");
+    aside?.setAttr("data-open", "true");
+    aside?.setAttr("role", "dialog");
+    aside?.setAttr("aria-modal", "true");
+    scrim?.addClass("is-open");
+    scrim?.setAttr("data-open", "true");
+    this.contextTrigger?.setAttr("aria-expanded", "true");
+    window.setTimeout(() => aside?.querySelector<HTMLButtonElement>(".vc-control-context-close")?.focus(), 0);
+  }
+
+  private closeContext(restoreFocus: boolean): void {
+    this.contextOpen = false;
+    const aside = this.contentEl.querySelector<HTMLElement>(`#vc-control-context-${this.instanceId}`);
+    const scrim = this.contentEl.querySelector<HTMLElement>(".vc-control-context-scrim");
+    aside?.removeClass("is-open");
+    aside?.setAttr("data-open", "false");
+    aside?.setAttr("role", "complementary");
+    aside?.removeAttribute("aria-modal");
+    scrim?.removeClass("is-open");
+    scrim?.setAttr("data-open", "false");
+    this.contextTrigger?.setAttr("aria-expanded", "false");
+    if (restoreFocus) window.setTimeout(() => this.contextTrigger?.focus({ preventScroll: true }), 0);
+  }
+
+  private trapContextFocus(event: KeyboardEvent): boolean {
+    const aside = this.contentEl.querySelector<HTMLElement>(`#vc-control-context-${this.instanceId}`);
+    if (!aside) return false;
+    const focusable = [...aside.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter(
+      (element) =>
+        !element.hasAttribute("disabled") &&
+        element.getAttribute("aria-hidden") !== "true" &&
+        element.getClientRects().length > 0
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (!first || !last) return false;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !aside.contains(active))) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && (active === last || !aside.contains(active))) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+
+  private reconcileContextPresentation(): void {
+    if (!this.contextOpen) return;
+    const aside = this.contentEl.querySelector<HTMLElement>(`#vc-control-context-${this.instanceId}`);
+    const close = aside?.querySelector<HTMLElement>(".vc-control-context-close");
+    if (!aside || !close || window.getComputedStyle(close).display !== "none") return;
+    const restoreHeading = aside.contains(document.activeElement);
+    this.closeContext(false);
+    if (restoreHeading) window.setTimeout(() => this.focusRouteHeading(), 0);
+    this.announce("Observed context changed from a modal drawer to the persistent context pane.");
+  }
+
+  private focusRouteHeading(): void {
+    this.contentEl.querySelector<HTMLElement>(`#vc-control-route-heading-${this.instanceId}`)?.focus({ preventScroll: true });
+  }
+
+  private restoreFocus(key: string): void {
+    const target = [...this.contentEl.querySelectorAll<HTMLElement>("[data-vc-focus]")].find(
+      (element) => element.dataset.vcFocus === key
+    );
+    if (target) window.setTimeout(() => target.focus({ preventScroll: true }), 0);
   }
 
   private addMetric(container: HTMLElement, label: string, value: string): void {
     const item = container.createDiv({ cls: "vc-control-metric" });
     item.createEl("dt", { text: label });
     item.createEl("dd", { text: value });
+  }
+
+  private renderLiveSummary(container: HTMLElement, live: LiveState): void {
+    const header = container.createEl("section", { cls: "vc-control-hero", attr: { "aria-label": "Campaign summary" } });
+    const identity = header.createDiv({ cls: "vc-control-identity" });
+    identity.createDiv({ cls: "vc-control-eyebrow", text: "LOCAL / OBSERVED / NO INFERENCE" });
+    identity.createEl("h2", { text: "Campaign systems online" });
+    identity.createEl("p", { text: "Canonical notes, installed capabilities, and reviewed local automation in one shell." });
+    const telemetry = header.createEl("dl", { cls: "vc-control-telemetry" });
+    this.addMetric(telemetry, "Latest played", live.latestLabel);
+    this.addMetric(telemetry, "Deployment", live.deploymentMode);
+    this.addMetric(telemetry, "Next session", live.nextSession === null ? "NOT DECLARED" : `SESSION ${live.nextSession}`);
+    this.addMetric(telemetry, "Open lead tasks", String(live.openLeadTasks));
+    this.addMetric(telemetry, "Active room", live.activeSessionName ?? "NOT SELECTED");
   }
 
   private renderLiveEdgeRouter(container: HTMLElement, live: LiveState): void {
@@ -403,18 +800,200 @@ class ControlPlaneView extends ItemView {
     const actions = section.createDiv({ cls: "vc-control-router-actions" });
     for (const id of ["open-latest-played", "open-current-state", "open-current-leads", "set-active-session-room"]) {
       const action = ACTION_BY_ID.get(id);
-      if (action) actions.appendChild(this.plugin.createActionButton(action, "view"));
+      if (action) this.renderActionShell(actions, action, true, "router");
     }
   }
 
-  private renderGroup(container: HTMLElement, group: ActionGroup): void {
+  private renderRouteActions(container: HTMLElement, route: PrimaryRoute, excluded = new Set<string>()): void {
+    const actions = CONTROL_ACTIONS.filter((action) => action.route === route && !excluded.has(action.id));
     const section = container.createEl("section", { cls: "vc-control-section" });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: group });
-    heading.createSpan({ text: `${CONTROL_ACTIONS.filter((action) => action.group === group).length} controls` });
+    heading.createEl("h2", { text: "Route actions" });
+    heading.createSpan({ text: `${actions.length} compiled controls` });
     const grid = section.createDiv({ cls: "vc-control-grid" });
-    for (const action of CONTROL_ACTIONS.filter((candidate) => candidate.group === group)) {
-      grid.appendChild(this.plugin.createActionButton(action, "view"));
+    for (const action of actions) {
+      this.renderActionShell(grid, action, false, `route-${route}`);
+    }
+  }
+
+  private renderActionShell(container: HTMLElement, action: ControlAction, compact: boolean, scope: string): void {
+    const shell = container.createDiv({ cls: "vc-control-action-shell" });
+    shell.appendChild(this.plugin.createActionButton(action, "view", `${scope}-${action.id}`, compact));
+    const favorite = shell.createEl("button", { cls: "vc-control-favorite-toggle" });
+    const selected = this.plugin.settings.favoriteActionIds.includes(action.id);
+    favorite.type = "button";
+    favorite.dataset.vcFocus = `favorite-${scope}-${action.id}`;
+    favorite.setAttr("aria-label", `${selected ? "Remove" : "Add"} ${action.title} ${selected ? "from" : "to"} favorites`);
+    favorite.setAttr("aria-pressed", String(selected));
+    const icon = favorite.createSpan();
+    icon.setAttr("aria-hidden", "true");
+    setIcon(icon, "star");
+    favorite.addEventListener("click", () => void this.plugin.toggleFavoriteAction(action.id));
+  }
+
+  private renderFavorites(container: HTMLElement): void {
+    const section = container.createEl("section", { cls: "vc-control-favorites" });
+    const header = section.createEl("header");
+    header.createEl("h2", { text: "Favorites" });
+    header.createSpan({ text: `${this.plugin.settings.favoriteActionIds.length} / 12` });
+    const actions = this.plugin.settings.favoriteActionIds.flatMap((id) => {
+      const action = ACTION_BY_ID.get(id);
+      return action ? [action] : [];
+    });
+    section.toggleClass("is-empty", actions.length === 0);
+    if (actions.length === 0) {
+      section.createEl("p", { cls: "vc-control-empty", text: "Use the star beside any route action to pin it here." });
+      return;
+    }
+    const list = section.createEl("ul", { cls: "vc-control-compact-list" });
+    for (const action of actions) {
+      const item = list.createEl("li");
+      this.renderActionShell(item, action, true, "favorite");
+    }
+  }
+
+  private renderRecentActions(container: HTMLElement, limit: number): void {
+    const section = container.createEl("section", { cls: "vc-control-recents" });
+    const header = section.createEl("header");
+    header.createEl("h2", { text: limit === 5 ? "Recent actions" : "Activity stream" });
+    header.createSpan({ text: "Plugin-local metadata only" });
+    const records = this.plugin.settings.recentActions.slice(0, limit);
+    section.toggleClass("is-empty", records.length === 0);
+    if (records.length === 0) {
+      section.createEl("p", { cls: "vc-control-empty", text: "No control-plane action has been attempted yet." });
+      return;
+    }
+    const list = section.createEl("ol", { cls: "vc-control-compact-list" });
+    for (const record of records) {
+      const action = ACTION_BY_ID.get(record.actionId);
+      if (!action) continue;
+      const item = list.createEl("li", { cls: `vc-control-recent-item${record.success ? "" : " is-fail"}` });
+      item.createEl("strong", { text: action.title });
+      item.createEl("time", { text: new Date(record.timestamp).toLocaleString(), attr: { datetime: record.timestamp } });
+      const resultLabel = record.success ? successfulActionReceipt(action).label : "ATTENTION";
+      item.createSpan({ text: `${action.verb} / ${action.route.toUpperCase()} / ${resultLabel}` });
+      item.createEl("code", { text: action.id });
+    }
+  }
+
+  private renderEntityNavigator(container: HTMLElement): void {
+    const section = container.createEl("section", {
+      cls: "vc-control-section",
+      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-label": "Entity navigator" }
+    });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Entity Navigator" });
+    heading.createSpan({ text: "CACHED FRONTMATTER / FIXED ROOTS" });
+
+    const index = this.plugin.getEntityIndex();
+    const toolbar = section.createDiv({ cls: "vc-control-entity-toolbar" });
+    const searchLabel = toolbar.createEl("label", { cls: "vc-control-entity-search" });
+    searchLabel.createSpan({ text: "Search entities" });
+    const search = searchLabel.createEl("input", {
+      type: "search",
+      value: this.entityQuery,
+      placeholder: "Title, alias, tag, status, or path"
+    });
+    search.dataset.vcFocus = "entity-search";
+
+    const filters = toolbar.createDiv({ cls: "vc-control-entity-filters" });
+    const typeLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
+    typeLabel.createSpan({ text: "Type" });
+    const typeSelect = typeLabel.createEl("select");
+    typeSelect.dataset.vcFocus = "entity-type";
+
+    const statusLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
+    statusLabel.createSpan({ text: "Status" });
+    const statusSelect = statusLabel.createEl("select");
+    statusSelect.dataset.vcFocus = "entity-status";
+
+    const count = section.createEl("p", { cls: "vc-control-entity-count" });
+    const results = section.createEl("ul", { cls: "vc-control-entity-results" });
+    const update = (): void => {
+      const filtered = filterEntityIndex(index, {
+        query: this.entityQuery,
+        types: this.entityType ? [this.entityType] : [],
+        statuses: this.entityStatus ? [this.entityStatus] : []
+      });
+      typeSelect.empty();
+      typeSelect.createEl("option", { text: "All types", value: "" });
+      for (const facet of filtered.facets.types) {
+        typeSelect.createEl("option", { text: `${facet.label} (${facet.count})`, value: facet.value });
+      }
+      typeSelect.value = this.entityType;
+
+      statusSelect.empty();
+      statusSelect.createEl("option", { text: "All statuses", value: "" });
+      for (const facet of filtered.facets.statuses) {
+        statusSelect.createEl("option", { text: `${facet.label} (${facet.count})`, value: facet.value });
+      }
+      if (this.entityStatus && !filtered.facets.statuses.some((facet) => facet.value === this.entityStatus)) {
+        statusSelect.createEl("option", { text: `${this.entityStatus} (0)`, value: this.entityStatus });
+      }
+      statusSelect.value = this.entityStatus;
+
+      count.setText(
+        filtered.truncated
+          ? `Showing ${filtered.shown} of ${filtered.total} matching entities (render cap ${filtered.limit}).`
+          : `Showing ${filtered.shown} of ${filtered.total} matching entities.`
+      );
+      results.empty();
+      results.toggleClass("is-empty", filtered.items.length === 0);
+      if (filtered.items.length === 0) {
+        results.createEl("li", { text: "No indexed entity matches the current fixed filters." });
+      } else {
+        for (const entry of filtered.items) this.renderEntityResult(results, entry);
+      }
+      this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
+    };
+    search.addEventListener("input", () => {
+      this.entityQuery = search.value;
+      update();
+    });
+    typeSelect.addEventListener("change", () => {
+      this.entityType = ENTITY_TYPES.includes(typeSelect.value as EntityType) ? (typeSelect.value as EntityType) : "";
+      update();
+    });
+    statusSelect.addEventListener("change", () => {
+      this.entityStatus = statusSelect.value;
+      update();
+    });
+    update();
+  }
+
+  private renderEntityResult(container: HTMLElement, entry: EntityIndexEntry): void {
+    const item = container.createEl("li");
+    const button = item.createEl("button", { cls: "vc-control-entity-result" });
+    button.type = "button";
+    button.dataset.vcFocus = `entity-${entry.path}`;
+    const copy = button.createSpan({ cls: "vc-control-entity-result-copy" });
+    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title });
+    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path });
+    const badges = button.createSpan({ cls: "vc-control-entity-badges" });
+    badges.createSpan({ cls: "vc-control-entity-badge", text: entry.type.toUpperCase() });
+    if (entry.status) badges.createSpan({ cls: "vc-control-entity-badge", text: entry.status });
+    if (entry.audience) badges.createSpan({ cls: "vc-control-entity-badge", text: `AUDIENCE ${entry.audience}` });
+    if (entry.canonStatus) badges.createSpan({ cls: "vc-control-entity-badge", text: `CANON ${entry.canonStatus}` });
+    button.addEventListener("click", () => void this.plugin.openEntityPath(entry.path));
+  }
+
+  private renderCapabilityInventory(container: HTMLElement): void {
+    const section = container.createEl("section", { cls: "vc-control-health", attr: { "aria-label": "Capability inventory" } });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Capability inventory" });
+    heading.createSpan({ text: "COMPILED ADAPTERS / FAIL CLOSED" });
+    const list = section.createEl("ul", { cls: "vc-control-health-list" });
+    for (const action of CONTROL_ACTIONS.filter((candidate) =>
+      ["command", "integration", "script", "external"].includes(candidate.kind)
+    )) {
+      const availability = this.plugin.getAvailability(action);
+      const item = list.createEl("li", { cls: availability.available ? "is-pass" : "is-attention" });
+      item.createEl("span", {
+        cls: "vc-control-health-state",
+        text: availability.available ? "AVAILABLE" : "UNAVAILABLE"
+      });
+      item.createEl("strong", { text: action.title });
+      item.createSpan({ text: availability.reason ?? `${action.kind.toUpperCase()} adapter is available.` });
     }
   }
 
@@ -465,13 +1044,14 @@ class ControlPlaneView extends ItemView {
     for (const profile of CONTEXT_PROFILES) {
       const card = profiles.createEl("button", { cls: "vc-control-profile" });
       card.type = "button";
+      card.dataset.vcFocus = `context-profile-${profile.id}`;
       card.toggleClass("is-active", profile.id === this.plugin.settings.activeContextProfile);
       card.setAttr("aria-pressed", String(profile.id === this.plugin.settings.activeContextProfile));
       card.createEl("strong", { text: profile.title });
       card.createEl("small", { text: "Guarded configuration; provider enforcement is not verified." });
       card.createEl("span", { text: profile.description });
       card.createEl("code", { text: `${profile.audiences.join("+")} / ${profile.retrievalScopes.join("+")}` });
-      this.plugin.registerDomEvent(card, "click", () => void this.plugin.setActiveContextProfile(profile.id));
+      card.addEventListener("click", () => void this.plugin.setActiveContextProfile(profile.id));
     }
   }
 
@@ -511,17 +1091,6 @@ class ControlPlaneView extends ItemView {
     }
   }
 
-  private applyFilter(container: HTMLElement): void {
-    const query = this.filter.trim().toLowerCase();
-    for (const button of container.querySelectorAll<HTMLElement>(".vc-control-action")) {
-      const haystack = button.dataset.search ?? "";
-      button.toggleClass("is-filtered", Boolean(query) && !haystack.includes(query));
-    }
-    for (const section of container.querySelectorAll<HTMLElement>(".vc-control-section")) {
-      const visible = section.querySelector(".vc-control-action:not(.is-filtered)");
-      section.toggleClass("is-filtered", !visible);
-    }
-  }
 }
 
 class ControlPlaneSettingTab extends PluginSettingTab {
@@ -655,6 +1224,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private readonly pendingConfirmationModals = new Set<ConfirmActionModal>();
   private readonly pendingWorkflowModals = new Set<WorkflowFormModal>();
   private readonly pendingProposalModals = new Set<ProposalReviewModal>();
+  private readonly pendingCommandSearchModals = new Set<ControlActionSearchModal>();
+  private commandSearchRefreshPending = false;
+  private entityIndex: readonly EntityIndexEntry[] | null = null;
   private transactionInProgress = false;
   private refreshTimer: number | null = null;
   private statusButton: HTMLButtonElement | null = null;
@@ -705,9 +1277,28 @@ export default class VeiledChicagoControlPlane extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (file.path === CURRENT_STATE_PATH || file.path === CURRENT_LEADS_PATH) this.scheduleRefresh();
+        if (deriveEntityType(file.path)) this.invalidateEntityIndex();
       })
     );
-    this.app.workspace.onLayoutReady(() => this.scheduleRefresh(0));
+    this.app.workspace.onLayoutReady(() => {
+      if (this.unloading) return;
+      this.registerEvent(
+        this.app.vault.on("create", (file) => {
+          if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", (file) => {
+          if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("rename", (file, oldPath) => {
+          if (this.isEntityScopePath(file.path) || this.isEntityScopePath(oldPath)) this.invalidateEntityIndex();
+        })
+      );
+      this.scheduleRefresh(0);
+    });
   }
 
   onunload(): void {
@@ -719,6 +1310,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
     this.pendingWorkflowModals.clear();
     for (const modal of this.pendingProposalModals) modal.close();
     this.pendingProposalModals.clear();
+    for (const modal of this.pendingCommandSearchModals) modal.close();
+    this.pendingCommandSearchModals.clear();
+    this.commandSearchRefreshPending = false;
     for (const child of this.activeChildren) {
       if (!child.killed) child.kill("SIGTERM");
     }
@@ -731,6 +1325,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
 
   async loadSettings(): Promise<void> {
     const saved = asRecord(await this.loadData());
+    const actionIds = ACTION_BY_ID.keys();
     const timeout = Math.min(300, Math.max(5, Number(saved.scriptTimeoutSeconds) || DEFAULT_SETTINGS.scriptTimeoutSeconds));
     const outputLimit = Math.min(
       50000,
@@ -770,6 +1365,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
       activeContextProfile: isContextProfileId(saved.activeContextProfile)
         ? saved.activeContextProfile
         : DEFAULT_SETTINGS.activeContextProfile,
+      activeRoute: isPrimaryRoute(saved.activeRoute) ? saved.activeRoute : DEFAULT_SETTINGS.activeRoute,
+      favoriteActionIds: normalizeFavoriteActionIds(saved.favoriteActionIds, actionIds),
+      recentActions: normalizeRecentActions(saved.recentActions, ACTION_BY_ID.keys()),
       recentRuns: recentRuns.slice(0, 8).map((run) => ({
         ...run,
         output: this.redactLocalOutput(run.output).slice(-outputLimit)
@@ -798,30 +1396,130 @@ export default class VeiledChicagoControlPlane extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
-    if (section && leaf.view instanceof ControlPlaneView) leaf.view.scrollToSection(section);
+    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+  }
+
+  async setActiveRoute(route: PrimaryRoute): Promise<void> {
+    if (!isPrimaryRoute(route)) return;
+    this.settings.activeRoute = route;
+    await this.saveSettings();
+    await this.refreshViews();
   }
 
   async setActiveContextProfile(profile: ContextProfileId): Promise<void> {
     this.settings.activeContextProfile = profile;
     await this.saveSettings();
-    await this.refreshViews();
+    await this.refreshViews(`Context profile changed to ${profile}.`);
   }
 
-  async refreshViews(): Promise<void> {
+  async refreshViews(announcement?: string): Promise<void> {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       const view = leaf.view;
-      if (view instanceof ControlPlaneView) await view.render();
+      if (view instanceof ControlPlaneView) await view.render(announcement);
     }
     await this.updateStatusButton();
   }
 
   private scheduleRefresh(delay = 80): void {
+    if (this.unloading) return;
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
+      if (this.unloading) return;
       this.applyProfilesToAllLeaves();
-      void this.refreshViews();
+      void this.refreshViews("Control plane state refreshed.");
     }, delay);
+  }
+
+  openCommandSearch(opener: HTMLElement | null, announce: (message: string) => void): void {
+    let modal: ControlActionSearchModal;
+    modal = new ControlActionSearchModal(this.app, {
+      actions: CONTROL_ACTIONS,
+      favoriteActionIds: this.settings.favoriteActionIds,
+      recentActions: this.settings.recentActions,
+      opener,
+      getAvailability: (action) => this.getAvailability(action),
+      onChoose: (action) => void this.executeAction(action.id, "view"),
+      onUnavailable: (action, reason) => {
+        new Notice(reason, 7000);
+        void this.tryRecordRecentAction(action.id, false);
+        announce(`${action.title} is unavailable. ${reason}`);
+      },
+      onDismiss: () => {
+        this.pendingCommandSearchModals.delete(modal);
+        announce("Command search closed.");
+        if (this.pendingCommandSearchModals.size === 0 && this.commandSearchRefreshPending) {
+          this.commandSearchRefreshPending = false;
+          window.setTimeout(() => {
+            if (!this.unloading) void this.refreshViews();
+          }, 50);
+        }
+      }
+    });
+    this.pendingCommandSearchModals.add(modal);
+    modal.open();
+  }
+
+  async toggleFavoriteAction(actionId: string): Promise<void> {
+    if (!ACTION_BY_ID.has(actionId)) return;
+    const selected = this.settings.favoriteActionIds.includes(actionId);
+    if (!selected && this.settings.favoriteActionIds.length >= 12) {
+      new Notice("Favorites are limited to 12 compiled actions.", 6000);
+      this.announceToViews("Favorites remain unchanged; the 12-action limit is reached.");
+      return;
+    }
+    const next = selected
+      ? this.settings.favoriteActionIds.filter((candidate) => candidate !== actionId)
+      : [...this.settings.favoriteActionIds, actionId];
+    this.settings.favoriteActionIds = normalizeFavoriteActionIds(next, ACTION_BY_ID.keys());
+    await this.saveSettings();
+    const title = ACTION_BY_ID.get(actionId)?.title ?? actionId;
+    await this.refreshViews(`${title} ${selected ? "removed from" : "added to"} favorites.`);
+  }
+
+  getEntityIndex(): readonly EntityIndexEntry[] {
+    if (this.entityIndex) return this.entityIndex;
+    this.entityIndex = buildEntityIndex(
+      this.app.vault
+        .getMarkdownFiles()
+        .filter((file) => deriveEntityType(file.path) !== null)
+        .map((file) => ({
+          path: file.path,
+          basename: file.basename,
+          frontmatter: asRecord(this.app.metadataCache.getFileCache(file)?.frontmatter)
+        }))
+    );
+    return this.entityIndex;
+  }
+
+  async openEntityPath(path: string): Promise<void> {
+    if (!deriveEntityType(path)) {
+      new Notice("Entity navigation blocked a path outside the compiled roots.", 7000);
+      return;
+    }
+    try {
+      await this.openFile(this.fileAt(path));
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error), 7000);
+    }
+  }
+
+  private invalidateEntityIndex(): void {
+    this.entityIndex = null;
+    if (this.settings.activeRoute === "world") this.scheduleRefresh();
+  }
+
+  private isEntityScopePath(path: string): boolean {
+    if (deriveEntityType(path)) return true;
+    return ENTITY_ROOT_REGISTRY.some(
+      ({ root }) => path === root || path.startsWith(`${root}/`) || root.startsWith(`${path}/`)
+    );
+  }
+
+  private announceToViews(message: string): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof ControlPlaneView) leaf.view.announce(message);
+    }
   }
 
   async readLiveState(): Promise<LiveState> {
@@ -851,34 +1549,61 @@ export default class VeiledChicagoControlPlane extends Plugin {
     return (content.match(/^\s*[-*]\s+\[ \]\s+/gm) ?? []).length;
   }
 
-  createActionButton(action: ControlAction, source: "view" | "block"): HTMLButtonElement {
+  createActionButton(
+    action: ControlAction,
+    source: "view" | "block",
+    focusKey?: string,
+    compact = false
+  ): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "vc-control-action";
+    button.toggleClass("is-compact", compact);
     button.dataset.action = action.id;
-    button.dataset.search = `${action.id} ${action.title} ${action.description} ${action.group}`.toLowerCase();
+    if (focusKey) button.dataset.vcFocus = focusKey;
+    button.dataset.search = [
+      action.id,
+      action.title,
+      action.description,
+      action.group,
+      action.route,
+      action.verb,
+      ...(action.keywords ?? [])
+    ].join(" ").toLowerCase();
     const availability = this.getAvailability(action);
+    const running = this.runningActions.has(action.id);
+    const titleId = `vc-control-action-title-${crypto.randomUUID()}`;
+    const descriptionId = `vc-control-action-description-${crypto.randomUUID()}`;
+    const reasonId = availability.reason ? `vc-control-action-reason-${crypto.randomUUID()}` : null;
     button.setAttribute("aria-disabled", String(!availability.available));
-    button.setAttribute(
-      "aria-label",
-      `${action.title}. ${action.description}${availability.reason ? ` Unavailable: ${availability.reason}` : ""}`
-    );
+    button.setAttribute("aria-busy", String(running));
+    button.setAttribute("aria-labelledby", titleId);
+    button.setAttribute("aria-describedby", [descriptionId, reasonId].filter(Boolean).join(" "));
     if (availability.reason) button.setAttribute("title", availability.reason);
 
     const icon = button.createSpan({ cls: "vc-control-action-icon" });
-    setIcon(icon, this.runningActions.has(action.id) ? "loader-circle" : action.icon);
+    icon.setAttr("aria-hidden", "true");
+    setIcon(icon, running ? "loader-circle" : action.icon);
     const copy = button.createSpan({ cls: "vc-control-action-copy" });
-    copy.createSpan({ cls: "vc-control-action-title", text: action.title });
+    copy.createSpan({ cls: "vc-control-action-title", text: action.title, attr: { id: titleId } });
     copy.createSpan({
       cls: "vc-control-action-description",
-      text: availability.reason ?? action.description
+      text: action.description,
+      attr: { id: descriptionId }
     });
+    if (availability.reason && reasonId) {
+      copy.createSpan({
+        cls: "vc-control-action-reason",
+        text: `${availability.available ? "Fallback" : "Unavailable"}: ${availability.reason}`,
+        attr: { id: reasonId }
+      });
+    }
     const state = button.createSpan({
       cls: "vc-control-action-state",
-      text: this.runningActions.has(action.id) ? "RUNNING" : availability.available ? source === "block" ? "RUN" : "OPEN" : "OFFLINE"
+      text: running ? "RUNNING" : availability.available ? action.verb : "UNAVAILABLE"
     });
-    if (this.runningActions.has(action.id)) button.addClass("is-running");
-    this.registerDomEvent(button, "click", () => void this.executeAction(action.id, source));
+    if (running) button.addClass("is-running");
+    button.addEventListener("click", () => void this.executeAction(action.id, source));
     return button;
   }
 
@@ -968,15 +1693,19 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const protocolBlock = this.protocolBlockReason(action, source);
     if (protocolBlock) {
       new Notice(protocolBlock);
+      await this.tryRecordRecentAction(action.id, false);
+      this.announceToViews(`${action.title} was blocked by protocol policy.`);
       return;
     }
 
     const availability = this.getAvailability(action);
     if (!availability.available) {
       new Notice(availability.reason ?? `${action.title} is unavailable.`);
+      await this.tryRecordRecentAction(action.id, false);
+      this.announceToViews(`${action.title} is unavailable. ${availability.reason ?? ""}`.trim());
       return;
     }
-    if (action.confirm && this.settings.confirmScriptActions) {
+    if (action.confirm && (action.id === "start-audio-recorder" || this.settings.confirmScriptActions)) {
       let modal: ConfirmActionModal;
       modal = new ConfirmActionModal(
         this.app,
@@ -986,31 +1715,74 @@ export default class VeiledChicagoControlPlane extends Plugin {
           const currentProtocolBlock = this.protocolBlockReason(action, source);
           if (currentProtocolBlock) {
             new Notice(currentProtocolBlock);
+            void this.tryRecordRecentAction(action.id, false);
             return;
           }
           const currentAvailability = this.getAvailability(action);
           if (!currentAvailability.available) {
             new Notice(currentAvailability.reason ?? `${action.title} is unavailable.`);
+            void this.tryRecordRecentAction(action.id, false);
             return;
           }
-          void this.performAction(action).catch((error: unknown) => this.reportActionError(action.title, error));
+          void this.performAndRecordAction(action);
         },
-        () => this.pendingConfirmationModals.delete(modal)
+        (confirmed) => {
+          this.pendingConfirmationModals.delete(modal);
+          if (confirmed || this.unloading) return;
+          void this.tryRecordRecentAction(action.id, false);
+          this.announceToViews(`${action.title} was canceled.`);
+        }
       );
       this.pendingConfirmationModals.add(modal);
       modal.open();
       return;
     }
+    await this.performAndRecordAction(action);
+  }
+
+  private async performAndRecordAction(action: ControlAction): Promise<void> {
     try {
       await this.performAction(action);
+      const success =
+        action.kind !== "script" ||
+        this.settings.recentRuns.find((record) => record.actionId === action.id)?.ok === true;
+      await this.tryRecordRecentAction(action.id, success);
+      const outcome = success ? successfulActionReceipt(action).announcement : "attention required";
+      this.announceToViews(`${action.title}: ${outcome}.`);
     } catch (error) {
+      await this.tryRecordRecentAction(action.id, false);
       this.reportActionError(action.title, error);
+    }
+  }
+
+  private async tryRecordRecentAction(actionId: string, success: boolean): Promise<void> {
+    try {
+      await this.recordRecentAction(actionId, success);
+    } catch (error) {
+      new Notice(
+        `Activity receipt could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        10000
+      );
+    }
+  }
+
+  private async recordRecentAction(actionId: string, success: boolean): Promise<void> {
+    this.settings.recentActions = normalizeRecentActions(
+      [{ actionId, success, timestamp: new Date().toISOString() }, ...this.settings.recentActions],
+      ACTION_BY_ID.keys()
+    );
+    await this.saveSettings();
+    if (this.pendingCommandSearchModals.size === 0) {
+      await this.refreshViews();
+    } else {
+      this.commandSearchRefreshPending = true;
     }
   }
 
   private reportActionError(title: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     new Notice(`${title}: ${message}`, 12000);
+    this.announceToViews(`${title} failed. ${message}`);
   }
 
   private async performAction(action: ControlAction): Promise<void> {
@@ -1028,12 +1800,14 @@ export default class VeiledChicagoControlPlane extends Plugin {
       }
       case "command":
         if (!action.target || !this.executeCommand(action.target)) {
-          new Notice(`Could not execute ${action.title}.`);
+          throw new Error(`Could not execute the fixed command adapter for ${action.title}.`);
         }
         break;
       case "integration":
         if (action.target && this.commandAvailable(action.target)) {
-          this.executeCommand(action.target);
+          if (!this.executeCommand(action.target)) {
+            throw new Error(`Could not execute the fixed integration adapter for ${action.title}.`);
+          }
         } else {
           openExternalUrl(this.settings.mapUrl);
         }
@@ -1052,12 +1826,13 @@ export default class VeiledChicagoControlPlane extends Plugin {
 
   private async openFile(file: TFile | null): Promise<void> {
     if (!file) {
-      new Notice("The requested campaign note could not be resolved.");
-      return;
+      throw new Error("The requested campaign note could not be resolved.");
     }
-    const existing = this.app.workspace.getLeavesOfType("markdown").find((leaf) => {
+    let existing: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (existing) return;
       const view = leaf.view;
-      return view instanceof MarkdownView && view.file?.path === file.path;
+      if (view instanceof FileView && view.file?.path === file.path) existing = leaf;
     });
     if (existing) {
       await this.app.workspace.revealLeaf(existing);

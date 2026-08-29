@@ -47,7 +47,18 @@ for (const file of ["README.md", "main.js", "styles.css", "manifest.json"]) {
 }
 
 const removedVaultRoots = ["1-DM Toolkit", "1-Party", "1-Session Journals", "2-World-Chicago", "3-Mechanics"];
-for (const file of ["README.md", "main.js", "FEATURE_COVERAGE.md", "src/actions.ts", "src/operating.ts", "src/paths.ts"]) {
+for (const file of [
+  "README.md",
+  "main.js",
+  "FEATURE_COVERAGE.md",
+  "src/actions.ts",
+  "src/command-search.ts",
+  "src/entity-navigator.ts",
+  "src/main.ts",
+  "src/navigation.ts",
+  "src/operating.ts",
+  "src/paths.ts"
+]) {
   const contents = readFileSync(file, "utf8");
   for (const root of removedVaultRoots) {
     if (contents.includes(root)) errors.push(`${file} references removed vault root: ${root}`);
@@ -58,6 +69,7 @@ const actionSource = readFileSync("src/actions.ts", "utf8");
 const actionIds = [...actionSource.matchAll(/^\s{4}id: "([a-z0-9-]+)",$/gm)].map((match) => match[1]);
 const duplicateActionIds = actionIds.filter((id, index) => actionIds.indexOf(id) !== index);
 if (duplicateActionIds.length > 0) errors.push(`duplicate action IDs: ${[...new Set(duplicateActionIds)].join(", ")}`);
+if (actionIds.length !== 55) errors.push(`compiled action registry must contain exactly 55 actions; got ${actionIds.length}`);
 for (const file of ["src/actions.ts", "main.js", "companion/vcg_control.py"]) {
   const contents = readFileSync(file, "utf8");
   for (const retiredToken of ["tactical-ready", "--strict-ready"]) {
@@ -66,6 +78,17 @@ for (const file of ["src/actions.ts", "main.js", "companion/vcg_control.py"]) {
 }
 for (const requiredAction of [
   "open-live-edge-router",
+  "open-command-search",
+  "open-entity-navigator",
+  "open-quick-switcher",
+  "open-bookmarks",
+  "open-workspaces",
+  "save-workspace",
+  "start-audio-recorder",
+  "open-sessions-base",
+  "open-npcs-base",
+  "open-locations-base",
+  "open-review-queue-base",
   "create-managed-note",
   "capture-quick-inbox",
   "set-active-session-room",
@@ -110,6 +133,7 @@ for (const feature of contractFeatures) {
 const mainSource = readFileSync("src/main.ts", "utf8");
 const operatingSource = readFileSync("src/operating.ts", "utf8");
 const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
+const stylesSource = readFileSync("styles.css", "utf8");
 if (mainSource.includes("findLatestPlayedFallback")) errors.push("src/main.ts retains forbidden latest-played filename inference");
 if (!mainSource.includes("transactionInProgress")) errors.push("src/main.ts is missing the transaction mutex");
 if (!mainSource.includes("targetMatchesBaseline") || !mainSource.includes("contentHash(current)")) {
@@ -118,8 +142,8 @@ if (!mainSource.includes("targetMatchesBaseline") || !mainSource.includes("conte
 if (!mainSource.includes("pendingWorkflowModals") || !mainSource.includes("pendingProposalModals")) {
   errors.push("src/main.ts does not track all workflow and proposal modals");
 }
-if (!mainSource.includes('aria-disabled') || !mainSource.includes('prefers-reduced-motion: reduce')) {
-  errors.push("src/main.ts is missing accessible disabled-state or reduced-motion behavior");
+if (!mainSource.includes('aria-disabled') || !stylesSource.includes('prefers-reduced-motion: reduce')) {
+  errors.push("control-plane sources are missing accessible disabled-state or reduced-motion behavior");
 }
 if (
   !workflowSource.includes('aria-describedby') ||

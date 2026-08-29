@@ -27,6 +27,10 @@ export const VAULT_PATHS = {
   quickSearch: "1-Campaign/DM/Quick Search.md",
   vaultHealth: "1-Campaign/DM/Vault Health.md",
   quickCapture: "1-Campaign/DM/Operations Inbox/Quick Capture.md",
+  sessionsBase: "1-Campaign/DM/Databases/Sessions Database.base",
+  npcBase: "1-Campaign/DM/Databases/NPC Database.base",
+  locationBase: "1-Campaign/DM/Databases/Location Database.base",
+  reviewQueueBase: "1-Campaign/DM/Databases/Operational Review Queue.base",
   controlWrapper: "9-System/Automation/scripts/vcg_control.py"
 } as const;
 

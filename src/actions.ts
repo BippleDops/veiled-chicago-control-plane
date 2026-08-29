@@ -1,4 +1,5 @@
 import { VAULT_PATHS } from "./paths";
+import { validateActionNavigation, type ActionVerb, type PrimaryRoute } from "./navigation";
 
 export type ActionGroup =
   | "Live operations"
@@ -18,7 +19,7 @@ export type ActionKind =
   | "workflow"
   | "script";
 
-export interface ControlAction {
+interface ControlActionBase {
   id: string;
   title: string;
   description: string;
@@ -33,7 +34,13 @@ export interface ControlAction {
   protocolSafe?: boolean;
 }
 
-export const CONTROL_ACTIONS: readonly ControlAction[] = [
+export interface ControlAction extends ControlActionBase {
+  route: PrimaryRoute;
+  verb: ActionVerb;
+  keywords?: readonly string[];
+}
+
+const BASE_CONTROL_ACTIONS = [
   {
     id: "open-control-plane",
     title: "Control Plane",
@@ -42,6 +49,15 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     icon: "radar",
     kind: "view",
     protocolSafe: true
+  },
+  {
+    id: "open-command-search",
+    title: "Command Search",
+    description: "Search every compiled control-plane action with availability, favorites, and recent context.",
+    group: "Applications",
+    icon: "search",
+    kind: "view",
+    target: "command-search"
   },
   {
     id: "open-live-edge-router",
@@ -248,6 +264,26 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     kind: "workflow"
   },
   {
+    id: "start-audio-recorder",
+    title: "Start Audio Recorder",
+    description: "Start Obsidian's local audio recorder after confirming table consent and storage readiness.",
+    group: "Creation and session",
+    icon: "mic",
+    kind: "command",
+    target: "audio-recorder:start",
+    confirm: "Start Obsidian Audio Recorder? Confirm table consent and recording storage before continuing."
+  },
+  {
+    id: "open-sessions-base",
+    title: "Sessions Database",
+    description: "Open the native Bases index for session records.",
+    group: "Creation and session",
+    icon: "table-properties",
+    kind: "note",
+    target: VAULT_PATHS.sessionsBase,
+    protocolSafe: true
+  },
+  {
     id: "open-ai-context-policy",
     title: "AI Context Policy",
     description: "Open guarded context configurations and proposal-only boundaries.",
@@ -278,6 +314,16 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     protocolSafe: true
   },
   {
+    id: "open-entity-navigator",
+    title: "Entity Navigator",
+    description: "Search fixed NPC, location, faction, item, and session roots from cached frontmatter.",
+    group: "World and maps",
+    icon: "list-filter",
+    kind: "view",
+    target: "entity-navigator",
+    protocolSafe: true
+  },
+  {
     id: "open-faction-fronts",
     title: "Faction Fronts",
     description: "Open faction pressures and clocks.",
@@ -295,6 +341,26 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     icon: "contact-round",
     kind: "note",
     target: VAULT_PATHS.npcReference,
+    protocolSafe: true
+  },
+  {
+    id: "open-npcs-base",
+    title: "NPC Database",
+    description: "Open the native Bases index for NPC records.",
+    group: "World and maps",
+    icon: "contact-round",
+    kind: "note",
+    target: VAULT_PATHS.npcBase,
+    protocolSafe: true
+  },
+  {
+    id: "open-locations-base",
+    title: "Location Database",
+    description: "Open the native Bases index for location records.",
+    group: "World and maps",
+    icon: "map-pin",
+    kind: "note",
+    target: VAULT_PATHS.locationBase,
     protocolSafe: true
   },
   {
@@ -328,6 +394,45 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     fallback: "map-url",
     desktopOnly: true,
     protocolSafe: true
+  },
+  {
+    id: "open-quick-switcher",
+    title: "Quick Switcher",
+    description: "Open Obsidian's native file and command navigator.",
+    group: "Applications",
+    icon: "search",
+    kind: "command",
+    target: "switcher:open",
+    protocolSafe: true
+  },
+  {
+    id: "open-bookmarks",
+    title: "Bookmarks",
+    description: "Open Obsidian's native bookmarks view.",
+    group: "Applications",
+    icon: "bookmark",
+    kind: "command",
+    target: "bookmarks:open",
+    protocolSafe: true
+  },
+  {
+    id: "open-workspaces",
+    title: "Workspaces",
+    description: "Open Obsidian's native workspace manager.",
+    group: "Applications",
+    icon: "panels-top-left",
+    kind: "command",
+    target: "workspaces:open-modal",
+    protocolSafe: true
+  },
+  {
+    id: "save-workspace",
+    title: "Save Workspace",
+    description: "Capture the current Obsidian layout with the native Workspaces command.",
+    group: "Applications",
+    icon: "save",
+    kind: "command",
+    target: "workspaces:save"
   },
   {
     id: "open-5etools",
@@ -378,6 +483,16 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     icon: "heart-pulse",
     kind: "note",
     target: VAULT_PATHS.vaultHealth,
+    protocolSafe: true
+  },
+  {
+    id: "open-review-queue-base",
+    title: "Operational Review Queue",
+    description: "Open the native Bases queue for review-gated operational proposals.",
+    group: "Automation",
+    icon: "list-checks",
+    kind: "note",
+    target: VAULT_PATHS.reviewQueueBase,
     protocolSafe: true
   },
   {
@@ -462,7 +577,79 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     confirm: "Stop the locally managed Veiled Chicago map server?",
     desktopOnly: true
   }
-] as const;
+] as const satisfies readonly ControlActionBase[];
+
+type ControlActionId = (typeof BASE_CONTROL_ACTIONS)[number]["id"];
+type ActionNavigation = {
+  readonly route: PrimaryRoute;
+  readonly verb: ActionVerb;
+  readonly keywords?: readonly string[];
+};
+
+const ACTION_NAVIGATION = {
+  "open-control-plane": { route: "home", verb: "OPEN", keywords: ["dashboard", "console", "app"] },
+  "open-command-search": { route: "tools", verb: "OPEN", keywords: ["palette", "launcher", "find action"] },
+  "open-live-edge-router": { route: "home", verb: "OPEN", keywords: ["truth", "observed", "handoff"] },
+  "open-dm-control-deck": { route: "home", verb: "OPEN", keywords: ["front door", "operations"] },
+  "open-current-state": { route: "home", verb: "OPEN", keywords: ["truth", "chronology", "handoff"] },
+  "open-current-leads": { route: "home", verb: "OPEN", keywords: ["player choice", "deployment"] },
+  "open-latest-played": { route: "home", verb: "OPEN", keywords: ["journal", "played", "session"] },
+  "open-next-session-control": { route: "session", verb: "OPEN", keywords: ["declared", "control room"] },
+  "open-campaign-ledger": { route: "home", verb: "OPEN", keywords: ["evidence", "deltas", "uncertainty"] },
+  "open-combat-dashboard": { route: "session", verb: "OPEN", keywords: ["encounter", "readiness"] },
+  "open-initiative-tracker": { route: "tools", verb: "OPEN", keywords: ["combat", "encounter"] },
+  "open-dice-tray": { route: "tools", verb: "OPEN", keywords: ["roll", "tabletop"] },
+  "create-managed-note": { route: "create", verb: "CREATE", keywords: ["schema", "draft", "entity"] },
+  "capture-quick-inbox": { route: "create", verb: "CAPTURE", keywords: ["inbox", "intake", "idea"] },
+  "set-active-session-room": { route: "session", verb: "SELECT", keywords: ["explicit", "working room"] },
+  "open-active-session-control": { route: "session", verb: "OPEN", keywords: ["selected room", "control"] },
+  "scaffold-active-session-room": { route: "session", verb: "CREATE", keywords: ["draft", "operating notes"] },
+  "open-session-preflight": { route: "session", verb: "REVIEW", keywords: ["safety", "access", "readiness"] },
+  "capture-player-declaration": { route: "session", verb: "CAPTURE", keywords: ["verbatim", "choice", "evidence"] },
+  "generate-session-run": { route: "session", verb: "CREATE", keywords: ["conditional prep", "declaration"] },
+  "open-session-readiness": { route: "session", verb: "REVIEW", keywords: ["fail closed", "board"] },
+  "capture-live-event": { route: "session", verb: "CAPTURE", keywords: ["table log", "confirmed", "contested"] },
+  "open-promotion-review": { route: "session", verb: "REVIEW", keywords: ["canon", "evidence", "gate"] },
+  "propose-local-transcription": { route: "create", verb: "CREATE", keywords: ["audio", "consent", "receipt"] },
+  "start-audio-recorder": { route: "session", verb: "START", keywords: ["record", "microphone", "consent"] },
+  "open-sessions-base": { route: "session", verb: "OPEN", keywords: ["database", "base", "records"] },
+  "open-ai-context-policy": { route: "system", verb: "REVIEW", keywords: ["guardrails", "retrieval", "local ai"] },
+  "open-operations-health": { route: "system", verb: "REVIEW", keywords: ["capabilities", "gates", "status"] },
+  "open-campaign-board": { route: "world", verb: "OPEN", keywords: ["open world", "deployments"] },
+  "open-entity-navigator": { route: "world", verb: "OPEN", keywords: ["facets", "npc", "location", "faction", "item"] },
+  "open-faction-fronts": { route: "world", verb: "OPEN", keywords: ["clocks", "pressures"] },
+  "open-npc-reference": { route: "world", verb: "OPEN", keywords: ["people", "lookup"] },
+  "open-npcs-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "people"] },
+  "open-locations-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "places"] },
+  "open-map-registry": { route: "world", verb: "OPEN", keywords: ["bundles", "readiness", "atlas"] },
+  "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
+  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
+  "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
+  "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
+  "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
+  "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },
+  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "custom frame"] },
+  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder"] },
+  "open-terminal": { route: "tools", verb: "OPEN", keywords: ["lean terminal", "shell", "embedded"] },
+  "open-quick-search": { route: "tools", verb: "OPEN", keywords: ["campaign", "lookup"] },
+  "open-vault-health": { route: "system", verb: "REVIEW", keywords: ["dashboard", "validation"] },
+  "open-review-queue-base": { route: "system", verb: "REVIEW", keywords: ["database", "base", "proposals"] },
+  "run-live-edge-audit": { route: "system", verb: "RUN", keywords: ["truth", "canon", "future leaks"] },
+  "run-navigation-audit": { route: "system", verb: "RUN", keywords: ["routes", "hubs"] },
+  "run-link-audit": { route: "system", verb: "RUN", keywords: ["links", "broken"] },
+  "run-frontmatter-audit": { route: "system", verb: "RUN", keywords: ["metadata", "schema"] },
+  "run-css-audit": { route: "system", verb: "RUN", keywords: ["theme", "snippets", "styles"] },
+  "check-map-server": { route: "system", verb: "RUN", keywords: ["process", "port", "status"] },
+  "start-map-server": { route: "system", verb: "START", keywords: ["process", "vite", "loopback"] },
+  "stop-map-server": { route: "system", verb: "STOP", keywords: ["process", "vite", "loopback"] }
+} as const satisfies Record<ControlActionId, ActionNavigation>;
+
+export const CONTROL_ACTIONS: readonly ControlAction[] = BASE_CONTROL_ACTIONS.map((action) => ({
+  ...action,
+  ...ACTION_NAVIGATION[action.id]
+}));
+
+validateActionNavigation(CONTROL_ACTIONS);
 
 export const ACTION_BY_ID = new Map(CONTROL_ACTIONS.map((action) => [action.id, action]));
 

@@ -2,18 +2,26 @@ import { Buffer } from "node:buffer";
 
 import esbuild from "esbuild";
 
-const result = await esbuild.build({
-  entryPoints: ["tests/operating.test.ts"],
-  bundle: true,
-  format: "esm",
-  platform: "node",
-  target: "node20",
-  write: false,
-  logLevel: "silent"
-});
+const testEntries = [
+  "tests/operating.test.ts",
+  "tests/navigation.test.ts",
+  "tests/entity-navigator.test.ts"
+];
 
-const output = result.outputFiles[0];
-if (!output) throw new Error("The operating test bundle was not produced.");
+for (const entryPoint of testEntries) {
+  const result = await esbuild.build({
+    entryPoints: [entryPoint],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    write: false,
+    logLevel: "silent"
+  });
 
-const source = Buffer.from(output.contents).toString("base64");
-await import(`data:text/javascript;base64,${source}`);
+  const output = result.outputFiles[0];
+  if (!output) throw new Error(`The ${entryPoint} bundle was not produced.`);
+
+  const source = Buffer.from(output.contents).toString("base64");
+  await import(`data:text/javascript;base64,${source}`);
+}

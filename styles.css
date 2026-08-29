@@ -10,6 +10,7 @@
 .vc-control-confirm-modal,
 .vc-control-workflow-modal,
 .vc-control-proposal-modal,
+.vc-control-command-modal,
 .vc-control-status-button,
 .workspace-leaf-content[data-type^="custom-frames-"],
 .workspace-leaf-content[data-type="terminal-view"] {
@@ -25,6 +26,62 @@
   --vccp-utility: var(--vcg-font-utility, var(--font-monospace));
   --vccp-radius: var(--vcg-radius, var(--radius-m));
   --vccp-shadow: var(--vcg-shadow-soft, rgb(0 0 0 / 18%));
+}
+
+/* Native fuzzy search keeps Obsidian's listbox behavior; these children add
+ * route, verb, availability, and state information without replacing it. */
+.vc-control-command-modal .suggestion-item {
+  min-block-size: 3.25rem;
+  border-inline-start: 3px solid transparent;
+  border-radius: calc(var(--vccp-radius, 14px) * 0.65);
+}
+
+.vc-control-command-modal .suggestion-item.is-selected {
+  border-inline-start-color: var(--vccp-seam, var(--interactive-accent));
+}
+
+.vc-control-command-result {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.vc-control-command-result-header,
+.vc-control-command-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.vc-control-command-result-header strong,
+.vc-control-command-result-description {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vc-control-command-result-verb,
+.vc-control-command-result-meta > span {
+  color: var(--text-muted);
+  font: 700 var(--font-ui-smaller) var(--vccp-utility, var(--font-interface));
+  letter-spacing: 0.06em;
+}
+
+.vc-control-command-result.is-unavailable {
+  opacity: 0.72;
+}
+
+.vc-control-command-result.is-unavailable .vc-control-command-result-verb {
+  color: var(--text-error);
+}
+
+@media (forced-colors: active) {
+  .vc-control-command-modal .suggestion-item.is-selected {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 .vc-control-plane {
@@ -47,6 +104,7 @@
 .vc-control-confirm-modal :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-workflow-modal :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-proposal-modal :is(button, input, select, textarea, a, summary):focus-visible,
+.vc-control-command-modal :is(button, input, select, textarea, a, summary):focus-visible,
 .vc-control-status-button:focus-visible {
   outline: 3px solid var(--vccp-focus);
   outline-offset: 3px;
@@ -1037,5 +1095,1127 @@
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     break-inside: avoid;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Control Plane 1.2 application shell
+ *
+ * These selectors are intentionally additive. The 1.1 dashboard and embedded
+ * control-block selectors above remain available while the application shell
+ * provides route navigation, observed context, and compact command surfaces.
+ * ----------------------------------------------------------------------- */
+
+.vc-control-shell {
+  --vccp-shell-gap: clamp(0.65rem, 1.3cqi, 1rem);
+  --vccp-rail-width: clamp(10.5rem, 14cqi, 13rem);
+  --vccp-context-width: clamp(16rem, 21cqi, 20rem);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--vccp-shell-gap);
+  min-width: 0;
+  min-height: 100%;
+  max-width: 112rem;
+  margin-inline: auto;
+}
+
+.vc-control-plane:has(> .vc-control-shell) {
+  padding: clamp(0.65rem, 2.6%, 2.6rem);
+}
+
+.vc-control-skip-link {
+  position: absolute;
+  z-index: var(--layer-popover, 30);
+  inset-block-start: 0.5rem;
+  inset-inline-start: 0.5rem;
+  transform: translateY(calc(-100% - 1rem));
+  min-height: 2.5rem;
+  border: 2px solid var(--vccp-focus);
+  border-radius: calc(var(--vccp-radius) * 0.7);
+  padding: 0.55rem 0.8rem;
+  color: var(--text-normal);
+  background: var(--vccp-surface-strong);
+  box-shadow: 0 0.65rem 1.6rem var(--vccp-shadow);
+  font-weight: 700;
+  transition: transform 120ms ease;
+}
+
+.vc-control-skip-link:focus,
+.vc-control-skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.vc-control-app-header {
+  position: sticky;
+  z-index: var(--layer-cover, 5);
+  top: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 28rem);
+  gap: var(--vccp-shell-gap);
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-block-start: 3px solid var(--vccp-seam);
+  border-radius: calc(var(--vccp-radius) * 1.15);
+  padding: 0.75rem;
+  background: var(--vccp-surface);
+  box-shadow: 0 0.65rem 1.6rem var(--vccp-shadow);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vc-control-app-header,
+  .vc-control-route-nav,
+  .vc-control-context,
+  .vc-control-bottom-nav,
+  .vc-control-more-panel {
+    background: var(--vccp-glass);
+    backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
+    -webkit-backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
+  }
+}
+
+.vc-control-brand {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.vc-control-brand > :is(h1, strong) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-family: var(--vcg-font-display, var(--font-text));
+  font-size: clamp(1.2rem, 2.4cqi, 1.65rem);
+  font-weight: 680;
+  line-height: 1.08;
+}
+
+.vc-control-brand > :is(p, span, small) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: var(--vccp-utility);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.vc-control-command-trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  margin: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.8);
+  padding: 0.55rem 0.7rem;
+  color: var(--text-muted);
+  background: var(--background-modifier-form-field);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--vccp-border) 30%, transparent);
+  text-align: start;
+}
+
+.vc-control-command-trigger:hover {
+  border-color: var(--vccp-signal);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.vc-control-command-trigger > :is(span, strong) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-control-command-trigger :is(kbd, .vc-control-shortcut) {
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.55);
+  padding: 0.12rem 0.38rem;
+  color: var(--text-muted);
+  background: var(--vccp-surface-strong);
+  box-shadow: inset 0 -1px 0 var(--vccp-border);
+  font: 650 var(--font-ui-smaller) var(--vccp-utility);
+  white-space: nowrap;
+}
+
+.vc-control-shell-grid {
+  display: grid;
+  grid-template-columns: var(--vccp-rail-width) minmax(0, 1fr) var(--vccp-context-width);
+  grid-template-areas: "rail route context";
+  gap: var(--vccp-shell-gap);
+  align-items: start;
+  min-width: 0;
+}
+
+.vc-control-route-nav {
+  position: sticky;
+  top: 5.25rem;
+  grid-area: rail;
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 1.15);
+  padding: 0.45rem;
+  background: var(--vccp-surface);
+  box-shadow: 0 0.55rem 1.5rem var(--vccp-shadow);
+}
+
+.vc-control-route-nav-list,
+.vc-control-bottom-nav-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vc-control-route-nav-list > li,
+.vc-control-bottom-nav-list > li {
+  min-width: 0;
+  margin: 0;
+}
+
+.vc-control-route-nav-button {
+  display: grid;
+  grid-template-columns: 1.8rem minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 3rem;
+  margin: 0;
+  border: 1px solid transparent;
+  border-inline-start: 3px solid transparent;
+  border-radius: calc(var(--vccp-radius) * 0.75);
+  padding: 0.45rem 0.55rem;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  text-align: start;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.vc-control-route-nav-button:hover {
+  border-color: var(--vccp-border);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.vc-control-route-nav-button[aria-current="page"] {
+  border-color: var(--vccp-border);
+  border-inline-start-color: var(--vccp-seam);
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--vccp-surface-strong) 90%, var(--vccp-signal));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--vccp-seam) 25%, transparent);
+  font-weight: 700;
+}
+
+.vc-control-route-nav-icon {
+  display: grid;
+  place-items: center;
+  inline-size: 1.8rem;
+  block-size: 1.8rem;
+  border: 1px solid color-mix(in srgb, var(--vccp-border) 76%, transparent);
+  border-radius: calc(var(--vccp-radius) * 0.6);
+  color: var(--vccp-signal);
+  background: color-mix(in srgb, var(--vccp-signal) 8%, transparent);
+}
+
+.vc-control-route-nav-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.vc-control-route-nav-button > :is(.vc-control-route-count, small) {
+  color: var(--text-muted);
+  font: 650 var(--font-ui-smaller) var(--vccp-utility);
+  font-variant-numeric: tabular-nums;
+}
+
+.vc-control-route-main {
+  grid-area: route;
+  min-width: 0;
+  scroll-margin-block-start: 5.25rem;
+}
+
+.vc-control-route-header {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  justify-content: space-between;
+  min-width: 0;
+  margin-block-end: 0.75rem;
+  border-block-end: 1px solid var(--vccp-border);
+  padding-block-end: 0.65rem;
+}
+
+.vc-control-route-header > div {
+  min-width: 0;
+}
+
+.vc-control-route-header :is(h1, h2) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-family: var(--vcg-font-display, var(--font-text));
+  font-size: clamp(1.45rem, 3cqi, 2.15rem);
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.vc-control-route-header p {
+  max-width: 68ch;
+  margin: 0.35rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.vc-control-context-toggle,
+.vc-control-context-close {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  border: 1px solid var(--vccp-border);
+  color: var(--text-normal);
+  background: var(--interactive-normal);
+}
+
+.vc-control-context-toggle {
+  display: none;
+}
+
+.vc-control-context {
+  position: sticky;
+  top: 5.25rem;
+  grid-area: context;
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  max-height: calc(100dvh - 7rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--vccp-border);
+  border-block-start: 3px solid var(--vccp-signal);
+  border-radius: calc(var(--vccp-radius) * 1.15);
+  padding: 0.75rem;
+  background: var(--vccp-surface);
+  box-shadow: 0 0.55rem 1.5rem var(--vccp-shadow);
+  scrollbar-gutter: stable;
+}
+
+.vc-control-context > header {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border-block-end: 1px solid var(--vccp-border);
+  padding-block-end: 0.55rem;
+}
+
+.vc-control-context > header :is(h2, h3) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--vcg-font-display, var(--font-text));
+  font-size: 1.08rem;
+}
+
+.vc-control-context-close {
+  display: none;
+}
+
+.vc-control-context-section {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.8);
+  padding: 0.65rem;
+  background: color-mix(in srgb, var(--vccp-surface-strong) 92%, transparent);
+}
+
+.vc-control-context-section :is(h3, h4, strong) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.vc-control-context-section :is(p, span, dd, code) {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.vc-control-context-section dl {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  gap: 0.35rem 0.55rem;
+  margin: 0;
+}
+
+.vc-control-context-section dt {
+  color: var(--text-muted);
+  font: 700 var(--font-ui-smaller) var(--vccp-utility);
+}
+
+.vc-control-context-section dd {
+  color: var(--text-normal);
+  text-align: end;
+}
+
+.vc-control-context-scrim {
+  display: none;
+}
+
+.vc-control-live-region {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.vc-control-favorites,
+.vc-control-recents {
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 1.1);
+  padding: 0.8rem;
+  background: var(--vccp-surface);
+  box-shadow: 0 0.45rem 1.3rem var(--vccp-shadow);
+}
+
+.vc-control-favorites > header,
+.vc-control-recents > header {
+  display: flex;
+  gap: 0.65rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-block-end: 0.6rem;
+  border-block-end: 1px solid var(--vccp-border);
+  padding-block-end: 0.5rem;
+}
+
+.vc-control-favorites > header :is(h2, h3),
+.vc-control-recents > header :is(h2, h3) {
+  margin: 0;
+  font-family: var(--vcg-font-display, var(--font-text));
+  font-size: 1.08rem;
+}
+
+.vc-control-favorites > header :is(span, small),
+.vc-control-recents > header :is(span, small) {
+  color: var(--text-muted);
+  font: 650 var(--font-ui-smaller) var(--vccp-utility);
+}
+
+.vc-control-favorites .vc-control-compact-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.vc-control-compact-list,
+.vc-control-entity-results {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vc-control-compact-list > li,
+.vc-control-entity-results > li {
+  min-width: 0;
+  margin: 0;
+}
+
+.vc-control-action.is-compact {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  min-height: 3.25rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.vc-control-action-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.vc-control-action-shell > .vc-control-action {
+  width: 100%;
+  min-width: 0;
+}
+
+.vc-control-favorite-toggle {
+  display: inline-grid;
+  place-items: center;
+  align-self: stretch;
+  min-width: 2rem;
+  min-height: 24px;
+  margin: 0;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.7);
+  padding: 0.35rem;
+  color: var(--text-muted);
+  background: var(--interactive-normal);
+  box-shadow: none;
+}
+
+.vc-control-favorite-toggle:hover {
+  border-color: var(--vccp-signal);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.vc-control-favorite-toggle[aria-pressed="true"] {
+  border-color: var(--vccp-seam);
+  color: var(--vccp-seam);
+  background: color-mix(in srgb, var(--vccp-seam) 12%, var(--vccp-surface-strong));
+}
+
+.vc-control-favorite-toggle:focus-visible {
+  outline: 3px solid var(--vccp-focus);
+  outline-offset: 3px;
+}
+
+.vc-control-action.is-compact .vc-control-action-icon {
+  inline-size: 1.8rem;
+  block-size: 1.8rem;
+}
+
+.vc-control-action.is-compact .vc-control-action-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.vc-control-action.is-compact .vc-control-action-state {
+  align-self: center;
+  white-space: nowrap;
+}
+
+.vc-control-recent-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.65rem;
+  min-width: 0;
+  border: 1px solid var(--vccp-border);
+  border-inline-start: 3px solid var(--vccp-signal);
+  border-radius: calc(var(--vccp-radius) * 0.75);
+  padding: 0.55rem 0.65rem;
+  background: color-mix(in srgb, var(--vccp-surface-strong) 94%, transparent);
+}
+
+.vc-control-recent-item.is-fail {
+  border-inline-start-color: var(--vccp-danger);
+  border-inline-start-style: dashed;
+}
+
+.vc-control-recent-item > :is(strong, span, time, code) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vc-control-recent-item > :is(time, code, small) {
+  color: var(--text-muted);
+  font: var(--font-ui-smaller) var(--vccp-utility);
+}
+
+.vc-control-recent-item > time {
+  white-space: nowrap;
+}
+
+.vc-control-favorites.is-empty,
+.vc-control-recents.is-empty,
+.vc-control-entity-results.is-empty {
+  border-style: dashed;
+}
+
+.vc-control-entity-toolbar {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto;
+  gap: 0.65rem;
+  align-items: end;
+  min-width: 0;
+  margin-block-end: 0.7rem;
+  border: 1px solid var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.9);
+  padding: 0.7rem;
+  background: var(--vccp-surface);
+}
+
+.vc-control-entity-search,
+.vc-control-entity-filter {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font: 700 var(--font-ui-smaller) var(--vccp-utility);
+}
+
+.vc-control-entity-search input,
+.vc-control-entity-filter select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  border: 1px solid var(--vccp-border);
+  color: var(--text-normal);
+  background: var(--background-modifier-form-field);
+}
+
+.vc-control-entity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+  min-width: 0;
+}
+
+.vc-control-entity-filter {
+  flex: 1 1 8.5rem;
+}
+
+.vc-control-entity-count {
+  margin: 0.45rem 0;
+  color: var(--text-muted);
+  font: 650 var(--font-ui-smaller) var(--vccp-utility);
+  font-variant-numeric: tabular-nums;
+}
+
+.vc-control-entity-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.4rem 0.7rem;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 3.5rem;
+  margin: 0;
+  border: 1px solid var(--vccp-border);
+  border-inline-start: 3px solid var(--vccp-seam);
+  border-radius: calc(var(--vccp-radius) * 0.8);
+  padding: 0.6rem 0.7rem;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--vccp-surface-strong) 94%, transparent);
+  box-shadow: none;
+  text-align: start;
+}
+
+.vc-control-entity-result:hover {
+  border-color: var(--vccp-signal);
+  background: var(--background-modifier-hover);
+}
+
+.vc-control-entity-result-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.vc-control-entity-result-title {
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-weight: 720;
+}
+
+.vc-control-entity-result-path {
+  overflow: hidden;
+  color: var(--text-muted);
+  font: var(--font-ui-smaller) var(--vccp-utility);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-control-entity-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  justify-content: end;
+  min-width: 0;
+}
+
+.vc-control-entity-badge {
+  border: 1px solid var(--vccp-border);
+  border-radius: 999px;
+  padding: 0.12rem 0.38rem;
+  color: var(--text-muted);
+  background: var(--vccp-surface-strong);
+  font: 650 0.65rem var(--vccp-utility);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.vc-control-entity-results.is-loading,
+.vc-control-entity-results.is-empty {
+  min-height: 6rem;
+  border: 1px dashed var(--vccp-border);
+  border-radius: calc(var(--vccp-radius) * 0.9);
+  padding: 0.75rem;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--vccp-surface-strong) 90%, transparent);
+}
+
+.vc-control-bottom-nav,
+.vc-control-more-panel {
+  display: none;
+}
+
+@container vc-control-plane (max-width: 72rem) {
+  .vc-control-shell {
+    --vccp-rail-width: 3.75rem;
+  }
+
+  .vc-control-shell-grid {
+    grid-template-columns: var(--vccp-rail-width) minmax(0, 1fr);
+    grid-template-areas: "rail route";
+  }
+
+  .vc-control-route-nav-button {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    padding-inline: 0.35rem;
+  }
+
+  .vc-control-route-nav-label,
+  .vc-control-route-nav-button > :is(.vc-control-route-count, small) {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .vc-control-context-toggle {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .vc-control-context {
+    position: fixed;
+    z-index: var(--layer-popover, 30);
+    inset-block: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-bottom));
+    inset-inline: auto max(0.75rem, env(safe-area-inset-right));
+    display: none;
+    width: min(22rem, calc(100cqi - 1.5rem));
+    max-width: calc(100cqi - 1.5rem);
+    max-height: none;
+    background: var(--vccp-surface-strong);
+    box-shadow: 0 1.2rem 3.5rem rgb(0 0 0 / 35%);
+  }
+
+  .vc-control-context.is-open,
+  .vc-control-context[data-open="true"] {
+    display: grid;
+  }
+
+  .vc-control-context-close {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .vc-control-context-scrim.is-open,
+  .vc-control-context-scrim[data-open="true"] {
+    position: fixed;
+    z-index: calc(var(--layer-popover, 30) - 1);
+    inset: 0;
+    display: block;
+    border: 0;
+    padding: 0;
+    background: rgb(0 0 0 / 48%);
+  }
+}
+
+@container vc-control-plane (max-width: 48rem) {
+  .vc-control-shell {
+    padding-block-end: calc(4.7rem + env(safe-area-inset-bottom));
+  }
+
+  .vc-control-app-header {
+    position: static;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .vc-control-command-trigger {
+    grid-column: 1 / -1;
+  }
+
+  .vc-control-shell-grid {
+    display: block;
+  }
+
+  .vc-control-route-nav {
+    display: none;
+  }
+
+  .vc-control-route-main {
+    width: 100%;
+    min-width: 0;
+    scroll-margin-block-start: 0.75rem;
+  }
+
+  .vc-control-bottom-nav {
+    position: sticky;
+    z-index: var(--layer-cover, 5);
+    inset-block: auto max(0.35rem, env(safe-area-inset-bottom));
+    inset-inline: auto;
+    display: block;
+    width: 100%;
+    border: 1px solid var(--vccp-border);
+    border-radius: calc(var(--vccp-radius) * 1.1);
+    padding: 0.35rem;
+    background: var(--vccp-surface-strong);
+    box-shadow: 0 -0.6rem 1.8rem rgb(0 0 0 / 28%);
+  }
+
+  .vc-control-bottom-nav-list {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.15rem;
+  }
+
+  .vc-control-bottom-nav button {
+    display: grid;
+    gap: 0.15rem;
+    place-items: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 3.25rem;
+    margin: 0;
+    border: 1px solid transparent;
+    border-block-start: 3px solid transparent;
+    border-radius: calc(var(--vccp-radius) * 0.7);
+    padding: 0.3rem 0.15rem;
+    color: var(--text-muted);
+    background: transparent;
+    box-shadow: none;
+    font-size: var(--font-ui-smaller);
+    line-height: 1.1;
+    text-align: center;
+  }
+
+  .vc-control-bottom-nav button[aria-current="page"] {
+    border-color: var(--vccp-border);
+    border-block-start-color: var(--vccp-seam);
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+    font-weight: 700;
+  }
+
+  .vc-control-more-panel {
+    position: sticky;
+    z-index: calc(var(--layer-cover, 5) + 1);
+    inset-block: auto calc(4.6rem + env(safe-area-inset-bottom));
+    inset-inline: auto;
+    width: 100%;
+    border: 1px solid var(--vccp-border);
+    border-block-start: 3px solid var(--vccp-seam);
+    border-radius: calc(var(--vccp-radius) * 1.1);
+    padding: 0.6rem;
+    background: var(--vccp-surface-strong);
+    box-shadow: 0 1rem 3rem rgb(0 0 0 / 35%);
+  }
+
+  .vc-control-more-panel.is-open,
+  .vc-control-more-panel[data-open="true"] {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .vc-control-route-header {
+    align-items: start;
+  }
+
+  .vc-control-favorites .vc-control-compact-list,
+  .vc-control-health-list,
+  .vc-control-transaction-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-entity-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container vc-control-plane (max-width: 30rem) {
+  .vc-control-app-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-context-toggle {
+    justify-self: start;
+  }
+
+  .vc-control-route-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-route-header > :is(button, .vc-control-context-toggle) {
+    justify-self: start;
+  }
+
+  .vc-control-action.is-compact,
+  .vc-control-recent-item,
+  .vc-control-entity-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-action.is-compact .vc-control-action-icon,
+  .vc-control-action.is-compact .vc-control-action-state {
+    justify-self: start;
+  }
+
+  .vc-control-recent-item > time,
+  .vc-control-entity-badges {
+    justify-content: start;
+    white-space: normal;
+  }
+
+  .vc-control-entity-result-path {
+    white-space: normal;
+  }
+
+  .vc-control-context-section dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vc-control-context-section dd {
+    text-align: start;
+  }
+}
+
+@container vc-control-plane (max-width: 20rem) {
+  .vc-control-shell {
+    --vccp-shell-gap: 0.45rem;
+  }
+
+  .vc-control-app-header,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-entity-toolbar {
+    padding-inline: 0.5rem;
+  }
+
+  .vc-control-command-trigger {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .vc-control-command-trigger :is(kbd, .vc-control-shortcut) {
+    display: none;
+  }
+
+  .vc-control-bottom-nav {
+    inset-inline: 0.15rem;
+  }
+
+  .vc-control-bottom-nav button {
+    min-height: 3rem;
+    font-size: 0.65rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .vc-control-command-trigger,
+  .vc-control-route-nav-button,
+  .vc-control-context-toggle,
+  .vc-control-context-close,
+  .vc-control-action.is-compact,
+  .vc-control-favorite-toggle,
+  .vc-control-recent-item,
+  .vc-control-entity-search input,
+  .vc-control-entity-filter select,
+  .vc-control-entity-result,
+  .vc-control-bottom-nav button,
+  .vc-control-more-panel button {
+    min-height: 44px;
+  }
+
+  .vc-control-context-toggle,
+  .vc-control-context-close,
+  .vc-control-favorite-toggle,
+  .vc-control-more-panel button {
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-control-skip-link,
+  .vc-control-route-nav-button,
+  .vc-control-command-trigger,
+  .vc-control-entity-result,
+  .vc-control-context,
+  .vc-control-more-panel {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .vc-control-app-header,
+  .vc-control-route-nav,
+  .vc-control-context,
+  .vc-control-bottom-nav,
+  .vc-control-more-panel,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-entity-toolbar {
+    background: var(--vccp-surface-strong);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .vc-control-context-scrim.is-open,
+  .vc-control-context-scrim[data-open="true"] {
+    background: var(--background-modifier-cover);
+  }
+}
+
+@media (prefers-contrast: more) {
+  .vc-control-app-header,
+  .vc-control-route-nav,
+  .vc-control-context,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-entity-toolbar,
+  .vc-control-entity-result,
+  .vc-control-route-nav-button[aria-current="page"],
+  .vc-control-bottom-nav button[aria-current="page"] {
+    border-width: 2px;
+  }
+
+  .vc-control-route-nav-button,
+  .vc-control-context-section :is(p, span, dd, code),
+  .vc-control-entity-result-path {
+    color: var(--text-normal);
+  }
+}
+
+@media (forced-colors: active) {
+  .vc-control-shell,
+  .vc-control-app-header,
+  .vc-control-command-trigger,
+  .vc-control-route-nav,
+  .vc-control-route-nav-button,
+  .vc-control-route-main,
+  .vc-control-context,
+  .vc-control-context-section,
+  .vc-control-context-toggle,
+  .vc-control-context-close,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-recent-item,
+  .vc-control-action-shell,
+  .vc-control-favorite-toggle,
+  .vc-control-entity-toolbar,
+  .vc-control-entity-result,
+  .vc-control-entity-badge,
+  .vc-control-bottom-nav,
+  .vc-control-bottom-nav button,
+  .vc-control-more-panel {
+    forced-color-adjust: auto;
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .vc-control-route-nav-button[aria-current="page"],
+  .vc-control-bottom-nav button[aria-current="page"] {
+    border-color: Highlight;
+    border-inline-start-color: Highlight;
+    border-block-start-color: Highlight;
+  }
+
+  .vc-control-route-nav-icon,
+  .vc-control-favorite-toggle[aria-pressed="true"],
+  .vc-control-entity-badge {
+    color: LinkText;
+  }
+
+  .vc-control-context-scrim.is-open,
+  .vc-control-context-scrim[data-open="true"] {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .vc-control-shell :is(button, input, select, textarea, a, summary):focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 3px;
+  }
+}
+
+@media print {
+  .vc-control-shell {
+    display: block;
+    max-width: none;
+  }
+
+  .vc-control-skip-link,
+  .vc-control-command-trigger,
+  .vc-control-route-nav,
+  .vc-control-context,
+  .vc-control-context-toggle,
+  .vc-control-context-scrim,
+  .vc-control-favorite-toggle,
+  .vc-control-bottom-nav,
+  .vc-control-more-panel,
+  .vc-control-live-region {
+    display: none;
+  }
+
+  .vc-control-app-header {
+    position: static;
+    display: block;
+    margin-block-end: 1rem;
+    color: #111111;
+    background: #ffffff;
+    border-color: #555555;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .vc-control-shell-grid {
+    display: block;
+  }
+
+  .vc-control-route-main,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-entity-toolbar,
+  .vc-control-entity-result,
+  .vc-control-recent-item {
+    width: 100%;
+    max-width: none;
+    color: #111111;
+    background: #ffffff;
+    border-color: #555555;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .vc-control-entity-results {
+    display: block;
+  }
+
+  .vc-control-entity-results > li {
+    margin-block-end: 0.4rem;
   }
 }

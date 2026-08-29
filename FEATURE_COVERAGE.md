@@ -15,12 +15,12 @@ Status vocabulary:
 | 2 | NAV-02 | Semantic freshness auditor | Vault/theme companion | Audit results appear in Recent automation; audit logic remains the vault script. |
 | 3 | NAV-03 | Dynamic Live Edge Router | Plugin delivered | `open-live-edge-router`; shows explicit Current State and plugin-local active room without filename inference. |
 | 4 | NAV-04 | Stable front doors | Vault/theme companion | Existing stable-note commands remain fixed and versioned. |
-| 5 | NAV-05 | Named operating workspaces | Vault/theme companion | Workspace definitions belong to the vault; plugin commands are stable hotkey targets. |
+| 5 | NAV-05 | Named operating workspaces | Vault/theme companion | Fixed native Workspaces open/save adapters are delivered; workspace definitions remain vault-owned. |
 | 6 | NAV-06 | Fail-closed Player Display | Guarded contract | `player-safe` context excludes DM/future scopes; styling is explicitly not access control. A full workspace-leaf gate remains external. |
 | 7 | NAV-07 | Singleton tabs and layout preservation | Plugin delivered | Note actions reveal an existing Markdown leaf before opening another tab. |
 | 8 | NAV-08 | Authority strip and semantic breadcrumbs | Vault/theme companion | Automatic `data-vcg-*` attributes and profile classes provide the theme contract. |
-| 9 | NAV-09 | Faceted entity navigator | Future implementation | Requires a performant Bases/custom-view index; the plugin does not fake it with full-vault DOM work. |
-| 10 | NAV-10 | Rebuild Chicago Bases suite | Vault/theme companion | Bases remain vault data/configuration. |
+| 9 | NAV-09 | Faceted entity navigator | Plugin delivered | Lazy fixed-root index uses `TFile` identity plus cached frontmatter, type/status facets, and a hard 100-result render cap without body reads. |
+| 10 | NAV-10 | Rebuild Chicago Bases suite | Vault/theme companion | Fixed Sessions, NPC, Location, and Operational Review Queue actions are delivered; Base schemas and data remain vault-owned. |
 | 11 | CAP-01 | Schema and template registry | Plugin delivered | `MANAGED_NOTE_SCHEMAS` is the typed creation contract. |
 | 12 | CAP-02 | Guided New Note wizard | Plugin delivered | `create-managed-note` two-step wizard and exact proposal preview. |
 | 13 | CAP-03 | Typed entity forms | Plugin delivered | NPC, location, faction, item, clue, ruling, player knowledge, research, and correction schemas. |
@@ -39,7 +39,7 @@ Status vocabulary:
 | 26 | SESSION-06 | Evidence-gated RUN generator | Plugin delivered | `generate-session-run` refuses to proceed without `vcg:declaration` evidence. |
 | 27 | SESSION-07 | Readiness board and table launcher | Plugin delivered | Fail-closed Readiness Board and `open-session-readiness`; workspace launch remains vault-owned. |
 | 28 | SESSION-08 | Append-only live event capture | Plugin delivered | `capture-live-event` records actor, event, status, audience, witnesses, timestamp, and event ID. |
-| 29 | SESSION-09 | Consent-aware audio and transcript pipeline | Guarded contract | Explicit audio picker, consent gate, retention field, fixed-runtime receipt; no background or implicit transcription. |
+| 29 | SESSION-09 | Consent-aware audio and transcript pipeline | Guarded contract | Confirmed native Audio Recorder start plus explicit audio picker, consent gate, retention field, and fixed-runtime receipt; no background or implicit transcription. |
 | 30 | SESSION-10 | Candidate review and atomic closeout | Guarded contract | Promotion Review enforces the human order; direct canonical-owner mutations are blocked in this release. |
 | 31 | AI-01 | One AI gateway | Future implementation | No provider network client is bundled or silently activated. |
 | 32 | AI-02 | Secret and egress management | Guarded contract | No credentials are collected; all profiles default local and canon writes are false. |
@@ -54,7 +54,7 @@ Status vocabulary:
 | 41 | GOV-01 | Observe / Propose / Execute broker | Plugin delivered | Compiled policy, proposal-only AI boundary, exact preview, and explicit execute confirmation. |
 | 42 | GOV-02 | Hardened REST/MCP bridge | Guarded contract | The plugin does not manage REST credentials or listeners; deployment hardening remains an external prerequisite. |
 | 43 | GOV-03 | Local-model security perimeter | Guarded contract | Health UI documents loopback-only contract without background probing or network egress. |
-| 44 | GOV-04 | Physical and desktop command surfaces | Guarded contract | Stable Obsidian command IDs are available for reviewed Shortcuts/Raycast/Stream Deck bindings. |
+| 44 | GOV-04 | Physical and desktop command surfaces | Guarded contract | Fifty-five stable Obsidian command IDs, command search, and fixed native adapters are available for reviewed Shortcuts/Raycast/Stream Deck bindings. |
 | 45 | GOV-05 | Calendar and task bridge | Future implementation | Requires a separately reviewed n8n workflow and constrained endpoint. |
 | 46 | GOV-06 | D&D Beyond provenance snapshots | Future implementation | No undocumented API or scraping behavior is bundled. |
 | 47 | GOV-07 | Map, combat, dice, and handout adapters | Plugin delivered | Fixed installed-command IDs, loopback map URL validation, and allowlisted map lifecycle actions. |

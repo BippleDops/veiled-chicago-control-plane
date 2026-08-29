@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-08-29
+
+- Replace the single scrolling dashboard with a responsive six-route application shell and observed-context pane.
+- Add native fuzzy command search, validated favorites and recent actions, explicit action verbs, and bounded route history.
+- Add a lazy cached-frontmatter entity navigator scoped to compiled NPC, location, faction, item, and session roots.
+- Add fixed adapters for Quick Switcher, Bookmarks, Workspaces, Audio Recorder, and four native Bases surfaces.
+- Preserve every 1.1 action ID, setting, workflow guard, transaction boundary, protocol allowlist, and campaign-authority rule.
+- Expand the registry to 55 compiled actions and add route, search, settings-normalization, and entity-index tests.
+- Add narrow-leaf bottom navigation, context drawer behavior, coarse-pointer targets, forced-colors support, and reduced-transparency handling.
+
 ## 1.1.0 - 2026-08-29
 
 - Add the dynamic Live Edge Router and explicit active-session registry.

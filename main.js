@@ -28,7 +28,7 @@ __export(main_exports, {
   profilesForPath: () => profilesForPath
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 var import_node_child_process = require("node:child_process");
 var import_node_fs = require("node:fs");
 
@@ -62,6 +62,10 @@ var VAULT_PATHS = {
   quickSearch: "1-Campaign/DM/Quick Search.md",
   vaultHealth: "1-Campaign/DM/Vault Health.md",
   quickCapture: "1-Campaign/DM/Operations Inbox/Quick Capture.md",
+  sessionsBase: "1-Campaign/DM/Databases/Sessions Database.base",
+  npcBase: "1-Campaign/DM/Databases/NPC Database.base",
+  locationBase: "1-Campaign/DM/Databases/Location Database.base",
+  reviewQueueBase: "1-Campaign/DM/Databases/Operational Review Queue.base",
   controlWrapper: "9-System/Automation/scripts/vcg_control.py"
 };
 var MANAGED_NOTE_ROOTS = {
@@ -88,8 +92,307 @@ function sessionControlRoomPath(session) {
   return `${sessionRoomPath(session)}/Session ${session} Control Room.md`;
 }
 
+// src/navigation.ts
+var PRIMARY_ROUTES = ["home", "session", "create", "world", "tools", "system"];
+var ACTION_VERBS = ["OPEN", "RUN", "CREATE", "CAPTURE", "REVIEW", "SELECT", "START", "STOP"];
+var ROUTE_DEFINITIONS = [
+  {
+    id: "home",
+    label: "Home",
+    mobileLabel: "Home",
+    description: "Observed campaign state, favorites, recents, and primary live operations.",
+    icon: "house",
+    mobilePrimary: true
+  },
+  {
+    id: "session",
+    label: "Session",
+    mobileLabel: "Session",
+    description: "Explicit active-room controls and review-gated session operations.",
+    icon: "panel-top-open",
+    mobilePrimary: true
+  },
+  {
+    id: "create",
+    label: "Create",
+    mobileLabel: "Create",
+    description: "Managed-note schemas, capture, research intake, and transcription proposals.",
+    icon: "file-plus-2",
+    mobilePrimary: true
+  },
+  {
+    id: "world",
+    label: "World",
+    mobileLabel: "World",
+    description: "Scoped entities, campaign boards, factions, maps, and player surfaces.",
+    icon: "globe-2",
+    mobilePrimary: true
+  },
+  {
+    id: "tools",
+    label: "Tools",
+    mobileLabel: "Tools",
+    description: "Installed vault navigation, tabletop utilities, applications, and terminal adapters.",
+    icon: "wrench",
+    mobilePrimary: false
+  },
+  {
+    id: "system",
+    label: "System",
+    mobileLabel: "System",
+    description: "Capability policy, health, audits, process controls, and activity receipts.",
+    icon: "settings-2",
+    mobilePrimary: false
+  }
+];
+function isPrimaryRoute(value) {
+  return typeof value === "string" && PRIMARY_ROUTES.includes(value);
+}
+function isActionVerb(value) {
+  return typeof value === "string" && ACTION_VERBS.includes(value);
+}
+function validateActionRouteAndVerb(action) {
+  if (typeof action.id !== "string" || action.id.trim() !== action.id || action.id.length === 0) {
+    throw new Error("Navigation action IDs must be non-empty strings without surrounding whitespace.");
+  }
+  if (!isPrimaryRoute(action.route)) {
+    throw new Error(`Action ${action.id} has an invalid or non-singular route.`);
+  }
+  if (!isActionVerb(action.verb)) {
+    throw new Error(`Action ${action.id} has an invalid verb.`);
+  }
+  return { id: action.id, route: action.route, verb: action.verb };
+}
+function validateActionNavigation(actions) {
+  const seen = /* @__PURE__ */ new Set();
+  return actions.map((action) => {
+    const validated = validateActionRouteAndVerb(action);
+    if (seen.has(validated.id)) throw new Error(`Duplicate navigation action ID: ${validated.id}`);
+    seen.add(validated.id);
+    return validated;
+  });
+}
+var LEGACY_SECTION_ROUTES = {
+  "live-edge": { route: "home", focusTarget: "live-edge" },
+  "ai-policy": { route: "system", focusTarget: "ai-policy" },
+  "operations-health": { route: "system", focusTarget: "operations-health" },
+  "live-operations": { route: "home" },
+  "creation-and-session": { route: "session" },
+  "ai-and-governance": { route: "system" },
+  "world-and-maps": { route: "world" },
+  applications: { route: "tools" },
+  automation: { route: "system" }
+};
+function normalizeLegacySection(section) {
+  return section.trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+function routeForLegacySection(section) {
+  if (typeof section !== "string" || section.trim().length === 0) return null;
+  const normalized = normalizeLegacySection(section);
+  if (isPrimaryRoute(normalized)) return { route: normalized };
+  return LEGACY_SECTION_ROUTES[normalized] ?? null;
+}
+var MAX_FAVORITE_ACTIONS = 12;
+var MAX_RECENT_ACTIONS = 20;
+function compiledActionIds(values) {
+  const result = /* @__PURE__ */ new Set();
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) result.add(value);
+  }
+  return result;
+}
+function normalizeFavoriteActionIds(value, validActionIds) {
+  if (!Array.isArray(value)) return [];
+  const valid = compiledActionIds(validActionIds);
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !valid.has(candidate) || seen.has(candidate)) continue;
+    seen.add(candidate);
+    result.push(candidate);
+    if (result.length === MAX_FAVORITE_ACTIONS) break;
+  }
+  return result;
+}
+var ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function isCanonicalIsoTimestamp(value) {
+  if (typeof value !== "string" || !ISO_TIMESTAMP.test(value)) return false;
+  const epoch = Date.parse(value);
+  return Number.isFinite(epoch) && new Date(epoch).toISOString() === value;
+}
+function parseIsoTimestamp(value) {
+  if (!isCanonicalIsoTimestamp(value)) return null;
+  const epoch = Date.parse(value);
+  return { value, epoch };
+}
+function normalizeRecentActions(value, validActionIds) {
+  if (!Array.isArray(value)) return [];
+  const valid = compiledActionIds(validActionIds);
+  const records = [];
+  for (const [sourceIndex, candidate] of value.entries()) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) continue;
+    const record = candidate;
+    if (typeof record.actionId !== "string" || !valid.has(record.actionId)) continue;
+    if (typeof record.success !== "boolean") continue;
+    const timestamp = parseIsoTimestamp(record.timestamp);
+    if (!timestamp) continue;
+    records.push({
+      actionId: record.actionId,
+      success: record.success,
+      timestamp: timestamp.value,
+      epoch: timestamp.epoch,
+      sourceIndex
+    });
+  }
+  records.sort((left, right) => right.epoch - left.epoch || left.sourceIndex - right.sourceIndex);
+  return records.slice(0, MAX_RECENT_ACTIONS).map(({ actionId, success, timestamp }) => ({
+    actionId,
+    success,
+    timestamp
+  }));
+}
+var RouteHistory = class {
+  constructor(initialRoute = "home", capacity = 50) {
+    this.capacity = capacity;
+    if (!isPrimaryRoute(initialRoute)) throw new Error("Route history requires a compiled initial route.");
+    if (!Number.isInteger(capacity) || capacity < 2 || capacity > 100) {
+      throw new Error("Route history capacity must be an integer from 2 through 100.");
+    }
+    this.entries = [initialRoute];
+  }
+  entries;
+  cursor = 0;
+  /** The route currently selected by the history cursor. */
+  get current() {
+    return this.entries[this.cursor] ?? "home";
+  }
+  /** Whether a previous route is available. */
+  get canGoBack() {
+    return this.cursor > 0;
+  }
+  /** Whether a later route remains after a backward traversal. */
+  get canGoForward() {
+    return this.cursor < this.entries.length - 1;
+  }
+  /** Add a route, discarding forward history and consecutive duplicates. */
+  push(route) {
+    if (!isPrimaryRoute(route)) throw new Error("Cannot add an uncompiled route to history.");
+    if (route === this.current) return this.current;
+    this.entries = this.entries.slice(0, this.cursor + 1);
+    this.entries.push(route);
+    if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity);
+    this.cursor = this.entries.length - 1;
+    return this.current;
+  }
+  /** Traverse one route backward, or return null when already at the beginning. */
+  back() {
+    if (!this.canGoBack) return null;
+    this.cursor -= 1;
+    return this.current;
+  }
+  /** Traverse one route forward, or return null when already at the end. */
+  forward() {
+    if (!this.canGoForward) return null;
+    this.cursor += 1;
+    return this.current;
+  }
+  /** Return a defensive snapshot suitable for tests and non-persistent diagnostics. */
+  snapshot() {
+    return { entries: [...this.entries], cursor: this.cursor, current: this.current };
+  }
+};
+function searchStateIndex(state) {
+  const favoriteIndex = /* @__PURE__ */ new Map();
+  for (const [index, id] of (state.favoriteActionIds ?? []).entries()) {
+    if (!favoriteIndex.has(id)) favoriteIndex.set(id, index);
+  }
+  const recentIndex = /* @__PURE__ */ new Map();
+  for (const [index, record] of (state.recentActions ?? []).entries()) {
+    if (!recentIndex.has(record.actionId)) recentIndex.set(record.actionId, index);
+  }
+  return { favoriteIndex, recentIndex };
+}
+function normalizeSearchValue(value) {
+  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+function buildActionSearchText(action, state = {}) {
+  const values = [
+    action.id,
+    action.title,
+    action.description,
+    action.route,
+    action.group ?? "",
+    action.verb,
+    ...(action.keywords ?? []).filter((keyword) => typeof keyword === "string"),
+    state.favorite ? "favorite" : "",
+    state.recent ? "recent" : ""
+  ];
+  return normalizeSearchValue(values.join(" "));
+}
+function fieldScore(field, query, exact, prefix, contains) {
+  if (field.length === 0) return 0;
+  if (field === query) return exact;
+  if (field.startsWith(query)) return prefix;
+  if (field.includes(query)) return contains;
+  return 0;
+}
+function tokenScore(action, token) {
+  const title = normalizeSearchValue(action.title);
+  const id = normalizeSearchValue(action.id);
+  const keywords = normalizeSearchValue((action.keywords ?? []).join(" "));
+  const route = normalizeSearchValue(action.route);
+  const verb = normalizeSearchValue(action.verb);
+  const group = normalizeSearchValue(action.group ?? "");
+  const description = normalizeSearchValue(action.description);
+  return Math.max(
+    fieldScore(title, token, 220, 190, 150),
+    fieldScore(id, token, 210, 180, 140),
+    fieldScore(keywords, token, 180, 150, 120),
+    fieldScore(route, token, 130, 110, 90),
+    fieldScore(verb, token, 130, 110, 90),
+    fieldScore(group, token, 100, 80, 60),
+    fieldScore(description, token, 70, 50, 30)
+  );
+}
+function rankOne(action, query, state) {
+  const favoriteIndex = state.favoriteIndex.get(action.id);
+  const recentIndex = state.recentIndex.get(action.id);
+  const favorite = favoriteIndex !== void 0;
+  const recent = recentIndex !== void 0;
+  const normalizedQuery = normalizeSearchValue(query);
+  if (normalizedQuery.length === 0) {
+    const score2 = favorite ? 3e4 - favoriteIndex * 100 + (recent ? Math.max(1, 20 - recentIndex) : 0) : recent ? 2e4 - recentIndex * 100 : 0;
+    return { action, score: score2, favorite, recent };
+  }
+  const searchText = buildActionSearchText(action, { favorite, recent });
+  const tokens = [...new Set(normalizedQuery.split(" "))];
+  if (tokens.some((token) => !searchText.includes(token))) return null;
+  const title = normalizeSearchValue(action.title);
+  const id = normalizeSearchValue(action.id);
+  let score = fieldScore(title, normalizedQuery, 2e3, 1700, 1300);
+  score = Math.max(score, fieldScore(id, normalizedQuery, 1900, 1600, 1200));
+  score += tokens.reduce((total, token) => total + tokenScore(action, token), 0);
+  if (favorite) score += Math.max(1, 40 - favoriteIndex);
+  if (recent) score += Math.max(1, 20 - recentIndex);
+  return { action, score, favorite, recent };
+}
+function compareStableText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function rankActionsForSearch(actions, query, state = {}) {
+  const index = searchStateIndex(state);
+  const ranked = actions.flatMap((action, sourceIndex) => {
+    const result = rankOne(action, query, index);
+    return result ? [{ ...result, sourceIndex }] : [];
+  });
+  ranked.sort(
+    (left, right) => right.score - left.score || compareStableText(normalizeSearchValue(left.action.title), normalizeSearchValue(right.action.title)) || compareStableText(left.action.id, right.action.id) || left.sourceIndex - right.sourceIndex
+  );
+  return ranked.map(({ sourceIndex: _sourceIndex, ...result }) => result);
+}
+
 // src/actions.ts
-var CONTROL_ACTIONS = [
+var BASE_CONTROL_ACTIONS = [
   {
     id: "open-control-plane",
     title: "Control Plane",
@@ -98,6 +401,15 @@ var CONTROL_ACTIONS = [
     icon: "radar",
     kind: "view",
     protocolSafe: true
+  },
+  {
+    id: "open-command-search",
+    title: "Command Search",
+    description: "Search every compiled control-plane action with availability, favorites, and recent context.",
+    group: "Applications",
+    icon: "search",
+    kind: "view",
+    target: "command-search"
   },
   {
     id: "open-live-edge-router",
@@ -304,6 +616,26 @@ var CONTROL_ACTIONS = [
     kind: "workflow"
   },
   {
+    id: "start-audio-recorder",
+    title: "Start Audio Recorder",
+    description: "Start Obsidian's local audio recorder after confirming table consent and storage readiness.",
+    group: "Creation and session",
+    icon: "mic",
+    kind: "command",
+    target: "audio-recorder:start",
+    confirm: "Start Obsidian Audio Recorder? Confirm table consent and recording storage before continuing."
+  },
+  {
+    id: "open-sessions-base",
+    title: "Sessions Database",
+    description: "Open the native Bases index for session records.",
+    group: "Creation and session",
+    icon: "table-properties",
+    kind: "note",
+    target: VAULT_PATHS.sessionsBase,
+    protocolSafe: true
+  },
+  {
     id: "open-ai-context-policy",
     title: "AI Context Policy",
     description: "Open guarded context configurations and proposal-only boundaries.",
@@ -334,6 +666,16 @@ var CONTROL_ACTIONS = [
     protocolSafe: true
   },
   {
+    id: "open-entity-navigator",
+    title: "Entity Navigator",
+    description: "Search fixed NPC, location, faction, item, and session roots from cached frontmatter.",
+    group: "World and maps",
+    icon: "list-filter",
+    kind: "view",
+    target: "entity-navigator",
+    protocolSafe: true
+  },
+  {
     id: "open-faction-fronts",
     title: "Faction Fronts",
     description: "Open faction pressures and clocks.",
@@ -351,6 +693,26 @@ var CONTROL_ACTIONS = [
     icon: "contact-round",
     kind: "note",
     target: VAULT_PATHS.npcReference,
+    protocolSafe: true
+  },
+  {
+    id: "open-npcs-base",
+    title: "NPC Database",
+    description: "Open the native Bases index for NPC records.",
+    group: "World and maps",
+    icon: "contact-round",
+    kind: "note",
+    target: VAULT_PATHS.npcBase,
+    protocolSafe: true
+  },
+  {
+    id: "open-locations-base",
+    title: "Location Database",
+    description: "Open the native Bases index for location records.",
+    group: "World and maps",
+    icon: "map-pin",
+    kind: "note",
+    target: VAULT_PATHS.locationBase,
     protocolSafe: true
   },
   {
@@ -384,6 +746,45 @@ var CONTROL_ACTIONS = [
     fallback: "map-url",
     desktopOnly: true,
     protocolSafe: true
+  },
+  {
+    id: "open-quick-switcher",
+    title: "Quick Switcher",
+    description: "Open Obsidian's native file and command navigator.",
+    group: "Applications",
+    icon: "search",
+    kind: "command",
+    target: "switcher:open",
+    protocolSafe: true
+  },
+  {
+    id: "open-bookmarks",
+    title: "Bookmarks",
+    description: "Open Obsidian's native bookmarks view.",
+    group: "Applications",
+    icon: "bookmark",
+    kind: "command",
+    target: "bookmarks:open",
+    protocolSafe: true
+  },
+  {
+    id: "open-workspaces",
+    title: "Workspaces",
+    description: "Open Obsidian's native workspace manager.",
+    group: "Applications",
+    icon: "panels-top-left",
+    kind: "command",
+    target: "workspaces:open-modal",
+    protocolSafe: true
+  },
+  {
+    id: "save-workspace",
+    title: "Save Workspace",
+    description: "Capture the current Obsidian layout with the native Workspaces command.",
+    group: "Applications",
+    icon: "save",
+    kind: "command",
+    target: "workspaces:save"
   },
   {
     id: "open-5etools",
@@ -434,6 +835,16 @@ var CONTROL_ACTIONS = [
     icon: "heart-pulse",
     kind: "note",
     target: VAULT_PATHS.vaultHealth,
+    protocolSafe: true
+  },
+  {
+    id: "open-review-queue-base",
+    title: "Operational Review Queue",
+    description: "Open the native Bases queue for review-gated operational proposals.",
+    group: "Automation",
+    icon: "list-checks",
+    kind: "note",
+    target: VAULT_PATHS.reviewQueueBase,
     protocolSafe: true
   },
   {
@@ -519,6 +930,68 @@ var CONTROL_ACTIONS = [
     desktopOnly: true
   }
 ];
+var ACTION_NAVIGATION = {
+  "open-control-plane": { route: "home", verb: "OPEN", keywords: ["dashboard", "console", "app"] },
+  "open-command-search": { route: "tools", verb: "OPEN", keywords: ["palette", "launcher", "find action"] },
+  "open-live-edge-router": { route: "home", verb: "OPEN", keywords: ["truth", "observed", "handoff"] },
+  "open-dm-control-deck": { route: "home", verb: "OPEN", keywords: ["front door", "operations"] },
+  "open-current-state": { route: "home", verb: "OPEN", keywords: ["truth", "chronology", "handoff"] },
+  "open-current-leads": { route: "home", verb: "OPEN", keywords: ["player choice", "deployment"] },
+  "open-latest-played": { route: "home", verb: "OPEN", keywords: ["journal", "played", "session"] },
+  "open-next-session-control": { route: "session", verb: "OPEN", keywords: ["declared", "control room"] },
+  "open-campaign-ledger": { route: "home", verb: "OPEN", keywords: ["evidence", "deltas", "uncertainty"] },
+  "open-combat-dashboard": { route: "session", verb: "OPEN", keywords: ["encounter", "readiness"] },
+  "open-initiative-tracker": { route: "tools", verb: "OPEN", keywords: ["combat", "encounter"] },
+  "open-dice-tray": { route: "tools", verb: "OPEN", keywords: ["roll", "tabletop"] },
+  "create-managed-note": { route: "create", verb: "CREATE", keywords: ["schema", "draft", "entity"] },
+  "capture-quick-inbox": { route: "create", verb: "CAPTURE", keywords: ["inbox", "intake", "idea"] },
+  "set-active-session-room": { route: "session", verb: "SELECT", keywords: ["explicit", "working room"] },
+  "open-active-session-control": { route: "session", verb: "OPEN", keywords: ["selected room", "control"] },
+  "scaffold-active-session-room": { route: "session", verb: "CREATE", keywords: ["draft", "operating notes"] },
+  "open-session-preflight": { route: "session", verb: "REVIEW", keywords: ["safety", "access", "readiness"] },
+  "capture-player-declaration": { route: "session", verb: "CAPTURE", keywords: ["verbatim", "choice", "evidence"] },
+  "generate-session-run": { route: "session", verb: "CREATE", keywords: ["conditional prep", "declaration"] },
+  "open-session-readiness": { route: "session", verb: "REVIEW", keywords: ["fail closed", "board"] },
+  "capture-live-event": { route: "session", verb: "CAPTURE", keywords: ["table log", "confirmed", "contested"] },
+  "open-promotion-review": { route: "session", verb: "REVIEW", keywords: ["canon", "evidence", "gate"] },
+  "propose-local-transcription": { route: "create", verb: "CREATE", keywords: ["audio", "consent", "receipt"] },
+  "start-audio-recorder": { route: "session", verb: "START", keywords: ["record", "microphone", "consent"] },
+  "open-sessions-base": { route: "session", verb: "OPEN", keywords: ["database", "base", "records"] },
+  "open-ai-context-policy": { route: "system", verb: "REVIEW", keywords: ["guardrails", "retrieval", "local ai"] },
+  "open-operations-health": { route: "system", verb: "REVIEW", keywords: ["capabilities", "gates", "status"] },
+  "open-campaign-board": { route: "world", verb: "OPEN", keywords: ["open world", "deployments"] },
+  "open-entity-navigator": { route: "world", verb: "OPEN", keywords: ["facets", "npc", "location", "faction", "item"] },
+  "open-faction-fronts": { route: "world", verb: "OPEN", keywords: ["clocks", "pressures"] },
+  "open-npc-reference": { route: "world", verb: "OPEN", keywords: ["people", "lookup"] },
+  "open-npcs-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "people"] },
+  "open-locations-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "places"] },
+  "open-map-registry": { route: "world", verb: "OPEN", keywords: ["bundles", "readiness", "atlas"] },
+  "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
+  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
+  "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
+  "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
+  "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
+  "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },
+  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "custom frame"] },
+  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder"] },
+  "open-terminal": { route: "tools", verb: "OPEN", keywords: ["lean terminal", "shell", "embedded"] },
+  "open-quick-search": { route: "tools", verb: "OPEN", keywords: ["campaign", "lookup"] },
+  "open-vault-health": { route: "system", verb: "REVIEW", keywords: ["dashboard", "validation"] },
+  "open-review-queue-base": { route: "system", verb: "REVIEW", keywords: ["database", "base", "proposals"] },
+  "run-live-edge-audit": { route: "system", verb: "RUN", keywords: ["truth", "canon", "future leaks"] },
+  "run-navigation-audit": { route: "system", verb: "RUN", keywords: ["routes", "hubs"] },
+  "run-link-audit": { route: "system", verb: "RUN", keywords: ["links", "broken"] },
+  "run-frontmatter-audit": { route: "system", verb: "RUN", keywords: ["metadata", "schema"] },
+  "run-css-audit": { route: "system", verb: "RUN", keywords: ["theme", "snippets", "styles"] },
+  "check-map-server": { route: "system", verb: "RUN", keywords: ["process", "port", "status"] },
+  "start-map-server": { route: "system", verb: "START", keywords: ["process", "vite", "loopback"] },
+  "stop-map-server": { route: "system", verb: "STOP", keywords: ["process", "vite", "loopback"] }
+};
+var CONTROL_ACTIONS = BASE_CONTROL_ACTIONS.map((action) => ({
+  ...action,
+  ...ACTION_NAVIGATION[action.id]
+}));
+validateActionNavigation(CONTROL_ACTIONS);
 var ACTION_BY_ID = new Map(CONTROL_ACTIONS.map((action) => [action.id, action]));
 var CONTROL_BLOCK_KEYS = /* @__PURE__ */ new Set(["title", "subtitle", "actions", "compact"]);
 function parseControlBlock(source) {
@@ -577,6 +1050,281 @@ function profilesForPath(path, frontmatter2 = {}) {
     result.add("vcg-handout");
   }
   return [...result];
+}
+
+// src/command-search.ts
+var import_obsidian = require("obsidian");
+var ControlActionSearchModal = class extends import_obsidian.FuzzySuggestModal {
+  constructor(app, options) {
+    super(app);
+    this.options = options;
+    this.favorites = new Set(options.favoriteActionIds);
+    this.recents = new Set(options.recentActions.map((record) => record.actionId));
+    this.setPlaceholder("Search control-plane actions\u2026");
+    this.setInstructions([
+      { command: "\u2191\u2193", purpose: "navigate" },
+      { command: "\u21B5", purpose: "run available action" },
+      { command: "esc", purpose: "close" }
+    ]);
+  }
+  favorites;
+  recents;
+  choseAction = false;
+  onOpen() {
+    super.onOpen();
+    this.modalEl.addClass("vc-control-command-modal");
+    this.inputEl.setAttr("aria-label", "Search control-plane actions");
+  }
+  getItems() {
+    return rankActionsForSearch(this.options.actions, "", {
+      favoriteActionIds: this.options.favoriteActionIds,
+      recentActions: this.options.recentActions
+    }).map(({ action }) => action);
+  }
+  getItemText(action) {
+    return buildActionSearchText(action, {
+      favorite: this.favorites.has(action.id),
+      recent: this.recents.has(action.id)
+    });
+  }
+  renderSuggestion({ item: action }, element) {
+    const availability = this.options.getAvailability(action);
+    element.addClass("vc-control-command-result");
+    element.toggleClass("is-unavailable", !availability.available);
+    element.setAttr("aria-disabled", String(!availability.available));
+    const header = element.createDiv({ cls: "vc-control-command-result-header" });
+    header.createEl("strong", { text: action.title });
+    header.createSpan({ cls: "vc-control-command-result-verb", text: action.verb });
+    const meta = element.createDiv({ cls: "vc-control-command-result-meta" });
+    meta.createSpan({ text: action.route.toUpperCase() });
+    if (this.favorites.has(action.id)) meta.createSpan({ text: "FAVORITE" });
+    if (this.recents.has(action.id)) meta.createSpan({ text: "RECENT" });
+    element.createEl("small", {
+      cls: "vc-control-command-result-description",
+      text: availability.reason ?? action.description
+    });
+  }
+  onChooseItem(action) {
+    const availability = this.options.getAvailability(action);
+    if (!availability.available) {
+      this.options.onUnavailable(action, availability.reason ?? `${action.title} is unavailable.`);
+      return;
+    }
+    this.choseAction = true;
+    this.options.onChoose(action);
+  }
+  onClose() {
+    super.onClose();
+    this.options.onDismiss();
+    if (!this.choseAction && this.options.opener?.isConnected) {
+      window.setTimeout(() => this.options.opener?.focus({ preventScroll: true }), 0);
+    }
+  }
+};
+
+// src/entity-navigator.ts
+var ENTITY_RESULT_LIMIT = 100;
+var ENTITY_TYPES = ["npc", "location", "faction", "item", "session"];
+var ENTITY_ROOT_REGISTRY = Object.freeze([
+  Object.freeze({ type: "npc", root: MANAGED_NOTE_ROOTS.npc, label: "NPCs" }),
+  Object.freeze({ type: "location", root: MANAGED_NOTE_ROOTS.location, label: "Locations" }),
+  Object.freeze({ type: "faction", root: MANAGED_NOTE_ROOTS.faction, label: "Factions" }),
+  Object.freeze({ type: "item", root: MANAGED_NOTE_ROOTS.item, label: "Items" }),
+  Object.freeze({ type: "session", root: VAULT_PATHS.sessionsRoot, label: "Sessions" })
+]);
+var STATUS_FIELDS = {
+  npc: ["char_status", "status"],
+  location: ["location_status", "status"],
+  faction: ["faction_status", "status"],
+  item: ["item_status", "status"],
+  session: ["session_status", "status"]
+};
+var TYPE_LABELS = Object.fromEntries(
+  ENTITY_ROOT_REGISTRY.map(({ type, label }) => [type, label])
+);
+function normalizePath(path) {
+  const normalized = path.trim();
+  if (normalized.length === 0 || normalized.startsWith("/") || normalized.includes("\\") || normalized.includes("\0")) {
+    return null;
+  }
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) return null;
+  if (!normalized.toLowerCase().endsWith(".md")) return null;
+  return normalized;
+}
+function ownMetadata(frontmatter2, key) {
+  if (frontmatter2 === null || frontmatter2 === void 0) return void 0;
+  return Object.prototype.hasOwnProperty.call(frontmatter2, key) ? frontmatter2[key] : void 0;
+}
+function normalizeDisplayString(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+function collectStrings(value, splitTags) {
+  if (Array.isArray(value)) return value.flatMap((item) => collectStrings(item, splitTags));
+  const scalar = normalizeDisplayString(value);
+  if (scalar === null) return [];
+  if (!splitTags) return [scalar];
+  return scalar.split(/[\s,]+/u).map((tag) => tag.replace(/^#+/u, "").trim()).filter((tag) => tag.length > 0);
+}
+function uniqueStrings(values) {
+  const seen = /* @__PURE__ */ new Set();
+  const unique = [];
+  for (const value of values) {
+    const key = normalizeSearchText(value);
+    if (key.length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(value);
+  }
+  return unique;
+}
+function firstMetadataString(frontmatter2, keys) {
+  for (const key of keys) {
+    const value = normalizeDisplayString(ownMetadata(frontmatter2, key));
+    if (value !== null) return value;
+  }
+  return null;
+}
+function metadataBadge(frontmatter2, key) {
+  const values = uniqueStrings(collectStrings(ownMetadata(frontmatter2, key), false));
+  return values.length > 0 ? values.join(", ") : null;
+}
+function inferredBasename(path) {
+  const filename = path.split("/").at(-1) ?? path;
+  return filename.replace(/\.md$/iu, "");
+}
+function normalizeSearchText(value) {
+  return value.normalize("NFKC").toLowerCase();
+}
+function compareText(left, right) {
+  const normalizedLeft = normalizeSearchText(left);
+  const normalizedRight = normalizeSearchText(right);
+  if (normalizedLeft < normalizedRight) return -1;
+  if (normalizedLeft > normalizedRight) return 1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function isEntityType(value) {
+  return typeof value === "string" && ENTITY_TYPES.includes(value);
+}
+function deriveEntityType(path) {
+  const normalized = normalizePath(path);
+  if (normalized === null) return null;
+  for (const definition of ENTITY_ROOT_REGISTRY) {
+    if (normalized.startsWith(`${definition.root}/`)) return definition.type;
+  }
+  return null;
+}
+function buildEntityIndex(files) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    const path = normalizePath(file.path);
+    if (path === null || entries.has(path)) continue;
+    const type = deriveEntityType(path);
+    if (type === null) continue;
+    const frontmatter2 = file.frontmatter;
+    const basename = normalizeDisplayString(file.basename) ?? inferredBasename(path);
+    const title = firstMetadataString(frontmatter2, ["title"]) ?? basename;
+    const aliases = uniqueStrings([
+      ...collectStrings(ownMetadata(frontmatter2, "aliases"), false),
+      ...collectStrings(ownMetadata(frontmatter2, "alias"), false)
+    ]);
+    const tags = uniqueStrings([
+      ...collectStrings(ownMetadata(frontmatter2, "tags"), true),
+      ...collectStrings(ownMetadata(frontmatter2, "tag"), true)
+    ]);
+    entries.set(path, {
+      path,
+      basename,
+      title,
+      type,
+      aliases,
+      tags,
+      status: firstMetadataString(frontmatter2, STATUS_FIELDS[type]),
+      audience: metadataBadge(frontmatter2, "audience"),
+      canonStatus: metadataBadge(frontmatter2, "canon_status")
+    });
+  }
+  return [...entries.values()].sort(
+    (left, right) => compareText(left.title, right.title) || compareText(left.path, right.path)
+  );
+}
+function entitySearchText(entry) {
+  return normalizeSearchText(
+    [
+      entry.title,
+      entry.basename,
+      ...entry.aliases,
+      ...entry.tags.flatMap((tag) => [tag, `#${tag}`]),
+      entry.status ?? "",
+      entry.path
+    ].join("\n")
+  );
+}
+function queryTerms(query) {
+  if (query === void 0) return [];
+  return uniqueStrings(
+    normalizeSearchText(query).split(/\s+/u).map((term) => term.trim()).filter((term) => term.length > 0)
+  );
+}
+function matchesQuery(entry, terms) {
+  if (terms.length === 0) return true;
+  const searchText = entitySearchText(entry);
+  return terms.every((term) => searchText.includes(term));
+}
+function facetsFor(entries) {
+  const typeCounts = new Map(ENTITY_TYPES.map((type) => [type, 0]));
+  const statusCounts = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    typeCounts.set(entry.type, (typeCounts.get(entry.type) ?? 0) + 1);
+    if (entry.status === null) continue;
+    const key = normalizeSearchText(entry.status);
+    const current = statusCounts.get(key);
+    statusCounts.set(key, {
+      label: current === void 0 || compareText(entry.status, current.label) < 0 ? entry.status : current.label,
+      count: (current?.count ?? 0) + 1
+    });
+  }
+  return {
+    types: ENTITY_TYPES.map((type) => ({ value: type, label: TYPE_LABELS[type], count: typeCounts.get(type) ?? 0 })),
+    statuses: [...statusCounts.entries()].sort(([left], [right]) => compareText(left, right)).map(([value, { label, count }]) => ({ value, label, count }))
+  };
+}
+function normalizedLimit(limit) {
+  if (limit === void 0 || !Number.isFinite(limit)) return ENTITY_RESULT_LIMIT;
+  return Math.min(ENTITY_RESULT_LIMIT, Math.max(1, Math.floor(limit)));
+}
+function filterEntityIndex(index, filters = {}) {
+  const terms = queryTerms(filters.query);
+  const queryMatches = index.filter((entry) => matchesQuery(entry, terms));
+  const facets = facetsFor(queryMatches);
+  const requestedTypes = filters.types ?? [];
+  const validTypes = new Set(requestedTypes.filter(isEntityType));
+  const invalidTypeFilter = requestedTypes.some((type) => !isEntityType(type));
+  const requestedStatuses = filters.statuses ?? [];
+  const invalidStatusFilter = requestedStatuses.some(
+    (status) => typeof status !== "string" || normalizeSearchText(status.trim()).length === 0
+  );
+  const validStatuses = new Set(
+    requestedStatuses.map((status) => typeof status === "string" ? normalizeSearchText(status.trim()) : "").filter((status) => status.length > 0)
+  );
+  const matches = invalidTypeFilter || invalidStatusFilter ? [] : queryMatches.filter((entry) => {
+    if (validTypes.size > 0 && !validTypes.has(entry.type)) return false;
+    if (validStatuses.size > 0 && (entry.status === null || !validStatuses.has(normalizeSearchText(entry.status)))) {
+      return false;
+    }
+    return true;
+  });
+  const limit = normalizedLimit(filters.limit);
+  const items = matches.slice(0, limit);
+  return {
+    items,
+    total: matches.length,
+    shown: items.length,
+    limit,
+    truncated: matches.length > items.length,
+    facets
+  };
 }
 
 // src/operating.ts
@@ -1347,8 +2095,8 @@ function buildRunProposal(input) {
 }
 
 // src/workflow-ui.ts
-var import_obsidian = require("obsidian");
-var WorkflowFormModal = class extends import_obsidian.Modal {
+var import_obsidian2 = require("obsidian");
+var WorkflowFormModal = class extends import_obsidian2.Modal {
   constructor(app, heading, description, fields, submitLabel, onSubmit, onDismiss = () => void 0) {
     super(app);
     this.heading = heading;
@@ -1381,7 +2129,7 @@ var WorkflowFormModal = class extends import_obsidian.Modal {
       attr: { id: errorId, role: "alert", "aria-live": "assertive", hidden: "" }
     });
     for (const field of this.fields) {
-      const setting = new import_obsidian.Setting(this.contentEl).setName(`${field.label}${field.required ? " *" : ""}`);
+      const setting = new import_obsidian2.Setting(this.contentEl).setName(`${field.label}${field.required ? " *" : ""}`);
       if (field.description) setting.setDesc(field.description);
       const fieldId = `vcg-field-${field.id}-${crypto.randomUUID()}`;
       const labelId = `${fieldId}-label`;
@@ -1458,7 +2206,7 @@ var WorkflowFormModal = class extends import_obsidian.Modal {
       for (const field of missing) this.markInvalid(field.id);
       this.showError(message);
       this.controls.get(missing[0]?.id ?? "")?.focus();
-      new import_obsidian.Notice(message);
+      new import_obsidian2.Notice(message);
       return;
     }
     this.submitting = true;
@@ -1469,7 +2217,7 @@ var WorkflowFormModal = class extends import_obsidian.Modal {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.showError(message);
-      new import_obsidian.Notice(`Control Plane: ${message}`, 1e4);
+      new import_obsidian2.Notice(`Control Plane: ${message}`, 1e4);
     } finally {
       this.submitting = false;
       if (this.submitButton) this.submitButton.disabled = false;
@@ -1513,7 +2261,7 @@ var WorkflowFormModal = class extends import_obsidian.Modal {
     this.errorEl?.setText("");
   }
 };
-var ProposalReviewModal = class extends import_obsidian.Modal {
+var ProposalReviewModal = class extends import_obsidian2.Modal {
   constructor(app, proposal, onExecute, onDismiss = () => void 0) {
     super(app);
     this.proposal = proposal;
@@ -1555,7 +2303,7 @@ var ProposalReviewModal = class extends import_obsidian.Modal {
       summary.createEl("code", { text: operation.kind.toUpperCase() });
       summary.createSpan({ text: operation.path });
       const target = this.app.vault.getAbstractFileByPath(operation.path);
-      const observed = target instanceof import_obsidian.TFile ? "existing file" : target instanceof import_obsidian.TFolder ? "folder (blocked)" : "missing";
+      const observed = target instanceof import_obsidian2.TFile ? "existing file" : target instanceof import_obsidian2.TFolder ? "folder (blocked)" : "missing";
       details.createEl("p", { text: `Precondition: ${operationTargetPrecondition(operation)}` });
       const baseline = details.createEl("p", { text: `Reviewed baseline: capturing ${observed}\u2026` });
       this.baselineElements.set(operation.path, baseline);
@@ -1602,7 +2350,7 @@ var ProposalReviewModal = class extends import_obsidian.Modal {
       const message = error instanceof Error ? error.message : String(error);
       this.errorEl?.removeAttribute("hidden");
       this.errorEl?.setText(message);
-      new import_obsidian.Notice(`Control Plane transaction failed: ${message}`, 12e3);
+      new import_obsidian2.Notice(`Control Plane transaction failed: ${message}`, 12e3);
     }
   }
   async captureBaselines(button) {
@@ -1610,8 +2358,8 @@ var ProposalReviewModal = class extends import_obsidian.Modal {
       const targetBaselines = await Promise.all(
         this.proposal.operations.map(async (operation) => {
           const target = this.app.vault.getAbstractFileByPath(operation.path);
-          if (target instanceof import_obsidian.TFolder) return buildTargetBaseline(operation.path, "folder", null, null, null);
-          if (!(target instanceof import_obsidian.TFile)) return buildTargetBaseline(operation.path, "missing", null, null, null);
+          if (target instanceof import_obsidian2.TFolder) return buildTargetBaseline(operation.path, "folder", null, null, null);
+          if (!(target instanceof import_obsidian2.TFile)) return buildTargetBaseline(operation.path, "missing", null, null, null);
           const contents = await this.app.vault.read(target);
           return buildTargetBaseline(operation.path, "file", contents, target.stat.mtime, target.stat.size);
         })
@@ -1645,14 +2393,6 @@ var ProposalReviewModal = class extends import_obsidian.Modal {
 var VIEW_TYPE = "veiled-chicago-control-plane";
 var CURRENT_STATE_PATH = VAULT_PATHS.currentState;
 var CURRENT_LEADS_PATH = VAULT_PATHS.currentLeads;
-var GROUPS = [
-  "Live operations",
-  "Creation and session",
-  "AI and governance",
-  "World and maps",
-  "Applications",
-  "Automation"
-];
 var APPROVED_AUDIO_EXTENSIONS = /* @__PURE__ */ new Set(["aac", "flac", "m4a", "mp3", "ogg", "wav", "webm"]);
 var DEFAULT_SETTINGS = {
   automationEnabled: false,
@@ -1665,6 +2405,9 @@ var DEFAULT_SETTINGS = {
   activeSessionRoom: null,
   activeSessionName: null,
   activeContextProfile: "session-live",
+  activeRoute: "home",
+  favoriteActionIds: [],
+  recentActions: [],
   recentRuns: [],
   recentTransactions: [],
   proposalReplayIds: []
@@ -1706,11 +2449,11 @@ function attributeToken(value) {
 }
 function isRunRecord(value) {
   const record = asRecord(value);
-  return typeof record.actionId === "string" && ACTION_BY_ID.has(record.actionId) && typeof record.title === "string" && typeof record.ok === "boolean" && typeof record.timestamp === "string" && Number.isFinite(Date.parse(record.timestamp)) && typeof record.durationMs === "number" && Number.isFinite(record.durationMs) && record.durationMs >= 0 && typeof record.output === "string";
+  return typeof record.actionId === "string" && ACTION_BY_ID.has(record.actionId) && typeof record.title === "string" && typeof record.ok === "boolean" && isCanonicalIsoTimestamp(record.timestamp) && typeof record.durationMs === "number" && Number.isFinite(record.durationMs) && record.durationMs >= 0 && typeof record.output === "string";
 }
 function isTransactionRecord(value) {
   const record = asRecord(value);
-  return typeof record.id === "string" && typeof record.title === "string" && typeof record.ok === "boolean" && typeof record.timestamp === "string" && Number.isFinite(Date.parse(record.timestamp)) && typeof record.operationCount === "number" && Number.isInteger(record.operationCount) && record.operationCount >= 0 && typeof record.summary === "string";
+  return typeof record.id === "string" && typeof record.title === "string" && typeof record.ok === "boolean" && isCanonicalIsoTimestamp(record.timestamp) && typeof record.operationCount === "number" && Number.isInteger(record.operationCount) && record.operationCount >= 0 && typeof record.summary === "string";
 }
 function isContextProfileId(value) {
   return typeof value === "string" && CONTEXT_PROFILES.some((profile) => profile.id === value);
@@ -1725,13 +2468,30 @@ function isEventStatus(value) {
 function isAudience(value) {
   return value === "dm" || value === "players" || value === "both";
 }
-var ConfirmActionModal = class extends import_obsidian2.Modal {
+function isEditableEventTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+function successfulActionReceipt(action) {
+  switch (action.kind) {
+    case "script":
+      return { label: "SUCCESS", announcement: "completed" };
+    case "command":
+    case "integration":
+    case "external":
+      return { label: "DISPATCHED", announcement: "adapter dispatched" };
+    default:
+      return { label: "OPENED", announcement: "opened" };
+  }
+}
+var ConfirmActionModal = class extends import_obsidian3.Modal {
   constructor(app, message, onConfirm, onDismiss) {
     super(app);
     this.message = message;
     this.onConfirm = onConfirm;
     this.onDismiss = onDismiss;
   }
+  confirmed = false;
   onOpen() {
     this.modalEl.addClass("vc-control-confirm-modal");
     const titleId = `vcg-confirm-title-${crypto.randomUUID()}`;
@@ -1752,22 +2512,62 @@ var ConfirmActionModal = class extends import_obsidian2.Modal {
     const confirm = footer.createEl("button", { cls: "mod-cta", text: "Run action" });
     confirm.type = "button";
     confirm.addEventListener("click", () => {
+      this.confirmed = true;
       this.close();
       this.onConfirm();
     });
     window.setTimeout(() => confirm.focus(), 0);
   }
   onClose() {
-    this.onDismiss();
+    this.onDismiss(this.confirmed);
     this.contentEl.empty();
   }
 };
-var ControlPlaneView = class extends import_obsidian2.ItemView {
+var ControlPlaneView = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this.routeHistory = new RouteHistory(plugin.settings.activeRoute);
   }
-  filter = "";
+  instanceId = crypto.randomUUID().slice(0, 8);
+  routeHistory;
+  liveRegion = null;
+  contextTrigger = null;
+  contextOpen = false;
+  moreOpen = false;
+  entityQuery = "";
+  entityType = "";
+  entityStatus = "";
+  renderGeneration = 0;
+  contextResizeObserver = null;
+  handleKeydown = (event) => {
+    if (event.key === "Tab" && this.contextOpen && this.trapContextFocus(event)) return;
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      this.openCommandSearch(event.target instanceof HTMLElement ? event.target : null);
+      return;
+    }
+    if (event.altKey && !event.metaKey && !event.ctrlKey && event.key === "ArrowLeft") {
+      if (isEditableEventTarget(event.target)) return;
+      event.preventDefault();
+      const route = this.routeHistory.back();
+      if (!route) return;
+      void this.navigate(route, false);
+      return;
+    }
+    if (event.altKey && !event.metaKey && !event.ctrlKey && event.key === "ArrowRight") {
+      if (isEditableEventTarget(event.target)) return;
+      event.preventDefault();
+      const route = this.routeHistory.forward();
+      if (!route) return;
+      void this.navigate(route, false);
+      return;
+    }
+    if (event.key === "Escape" && this.contextOpen) {
+      event.preventDefault();
+      this.closeContext(true);
+    }
+  };
   getViewType() {
     return VIEW_TYPE;
   }
@@ -1778,67 +2578,355 @@ var ControlPlaneView = class extends import_obsidian2.ItemView {
     return "radar";
   }
   async onOpen() {
+    this.contentEl.addEventListener("keydown", this.handleKeydown);
     await this.render();
+    this.contextResizeObserver = new ResizeObserver(() => this.reconcileContextPresentation());
+    this.contextResizeObserver.observe(this.contentEl);
   }
-  async render() {
+  async onClose() {
+    this.contentEl.removeEventListener("keydown", this.handleKeydown);
+    this.contextResizeObserver?.disconnect();
+    this.contextResizeObserver = null;
+  }
+  async render(announcement) {
+    const generation = ++this.renderGeneration;
     const { contentEl } = this;
+    const activeElement = document.activeElement;
+    const focusKey = activeElement instanceof HTMLElement && contentEl.contains(activeElement) ? activeElement.dataset.vcFocus ?? null : null;
+    const scrollTop = contentEl.scrollTop;
+    const persistentLiveRegion = this.liveRegion ?? document.createElement("div");
+    persistentLiveRegion.className = "vc-control-live-region";
+    persistentLiveRegion.setAttribute("aria-live", "polite");
+    persistentLiveRegion.setAttribute("aria-atomic", "true");
+    persistentLiveRegion.remove();
+    this.liveRegion = persistentLiveRegion;
+    if (this.routeHistory.current !== this.plugin.settings.activeRoute) {
+      this.routeHistory.push(this.plugin.settings.activeRoute);
+    }
+    const live = await this.plugin.readLiveState();
+    if (generation !== this.renderGeneration) return;
     contentEl.empty();
     contentEl.addClass("vc-control-plane");
     contentEl.setAttr("aria-label", "Veiled Chicago campaign control plane");
-    const live = await this.plugin.readLiveState();
-    const header = contentEl.createEl("header", { cls: "vc-control-hero" });
-    const identity = header.createDiv({ cls: "vc-control-identity" });
-    identity.createDiv({ cls: "vc-control-eyebrow", text: "VEILED CHICAGO / LOCAL CONTROL PLANE" });
-    identity.createEl("h1", { text: "Campaign systems online" });
-    identity.createEl("p", {
-      text: "A live HTML surface over canonical notes, installed plugins, and explicit local automation."
+    const route = ROUTE_DEFINITIONS.find((candidate) => candidate.id === this.plugin.settings.activeRoute) ?? ROUTE_DEFINITIONS[0];
+    if (!route) return;
+    const shell = contentEl.createDiv({ cls: "vc-control-shell" });
+    const mainId = `vc-control-route-main-${this.instanceId}`;
+    const skip = shell.createEl("a", { cls: "vc-control-skip-link", text: "Skip to route content", href: `#${mainId}` });
+    skip.dataset.vcFocus = "skip-link";
+    skip.addEventListener("click", () => {
+      window.setTimeout(() => this.focusRouteHeading(), 0);
     });
+    const appHeader = shell.createEl("header", { cls: "vc-control-app-header" });
+    const brand = appHeader.createDiv({ cls: "vc-control-brand" });
+    brand.createEl("h1", { text: "Veiled Chicago" });
+    brand.createEl("p", { text: "Local campaign control plane / observed state only" });
+    const commandTrigger = appHeader.createEl("button", { cls: "vc-control-command-trigger" });
+    commandTrigger.type = "button";
+    commandTrigger.dataset.vcFocus = "command-search";
+    const commandIcon = commandTrigger.createSpan();
+    commandIcon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(commandIcon, "search");
+    commandTrigger.createSpan({ text: "Search actions" });
+    commandTrigger.createEl("kbd", { text: import_obsidian3.Platform.isMacOS ? "\u2318 K" : "Ctrl K" });
+    commandTrigger.addEventListener("click", () => this.openCommandSearch(commandTrigger));
+    const grid = shell.createDiv({ cls: "vc-control-shell-grid" });
+    this.renderRouteNavigation(grid, route.id);
+    const main = grid.createEl("main", { cls: "vc-control-route-main", attr: { id: mainId } });
+    const routeHeader = main.createEl("header", { cls: "vc-control-route-header" });
+    const routeCopy = routeHeader.createDiv();
+    routeCopy.createEl("h2", {
+      text: route.label,
+      attr: { id: `vc-control-route-heading-${this.instanceId}`, tabindex: "-1" }
+    }).dataset.vcFocus = `route-heading-${route.id}`;
+    routeCopy.createEl("p", { text: route.description });
+    this.contextTrigger = routeHeader.createEl("button", { cls: "vc-control-context-toggle" });
+    this.contextTrigger.type = "button";
+    this.contextTrigger.dataset.vcFocus = "context-toggle";
+    this.contextTrigger.setAttr("aria-label", "Open observed context");
+    this.contextTrigger.setAttr("aria-expanded", String(this.contextOpen));
+    this.contextTrigger.setAttr("aria-controls", `vc-control-context-${this.instanceId}`);
+    const contextIcon = this.contextTrigger.createSpan();
+    contextIcon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(contextIcon, "panel-right-open");
+    this.contextTrigger.addEventListener("click", () => this.openContext());
+    this.renderRoute(main, route.id, live);
+    this.renderContext(grid, live);
+    this.renderBottomNavigation(shell, route.id);
+    shell.appendChild(persistentLiveRegion);
+    contentEl.scrollTop = scrollTop;
+    if (focusKey) this.restoreFocus(focusKey);
+    if (announcement) this.announce(announcement);
+  }
+  async navigateTo(section) {
+    if (section === "command-search") {
+      const active = document.activeElement;
+      const opener = active instanceof HTMLElement && this.contentEl.contains(active) ? active : this.contentEl.querySelector('[data-vc-focus="command-search"]') ?? this.contentEl.querySelector(`#vc-control-route-heading-${this.instanceId}`);
+      this.openCommandSearch(opener);
+      return;
+    }
+    const target = section === "entity-navigator" ? { route: "world", focusTarget: "entity-navigator" } : routeForLegacySection(section ?? this.plugin.settings.activeRoute);
+    if (!target) return;
+    await this.navigate(target.route, true, target.focusTarget);
+  }
+  announce(message) {
+    const region = this.liveRegion;
+    if (!region) return;
+    region.setText("");
+    window.setTimeout(() => {
+      if (region.isConnected) region.setText(message);
+    }, 0);
+  }
+  renderRouteNavigation(container, activeRoute) {
+    const nav = container.createEl("nav", {
+      cls: "vc-control-route-nav",
+      attr: { "aria-label": "Control plane routes" }
+    });
+    const list = nav.createEl("ul", { cls: "vc-control-route-nav-list" });
+    for (const route of ROUTE_DEFINITIONS) {
+      const item = list.createEl("li");
+      const button = item.createEl("button", { cls: "vc-control-route-nav-button" });
+      button.type = "button";
+      button.dataset.vcFocus = `route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      const icon = button.createSpan({ cls: "vc-control-route-nav-icon" });
+      icon.setAttr("aria-hidden", "true");
+      (0, import_obsidian3.setIcon)(icon, route.icon);
+      button.createSpan({ cls: "vc-control-route-nav-label", text: route.label });
+      button.createSpan({
+        cls: "vc-control-route-count",
+        text: String(CONTROL_ACTIONS.filter((action) => action.route === route.id).length)
+      });
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+  }
+  renderBottomNavigation(container, activeRoute) {
+    const nav = container.createEl("nav", {
+      cls: "vc-control-bottom-nav",
+      attr: { "aria-label": "Mobile control plane routes" }
+    });
+    const list = nav.createEl("ul", { cls: "vc-control-bottom-nav-list" });
+    for (const route of ROUTE_DEFINITIONS.filter((candidate) => candidate.mobilePrimary)) {
+      const item = list.createEl("li");
+      const button = item.createEl("button");
+      button.type = "button";
+      button.dataset.vcFocus = `mobile-route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      const icon = button.createSpan();
+      icon.setAttr("aria-hidden", "true");
+      (0, import_obsidian3.setIcon)(icon, route.icon);
+      button.createSpan({ text: route.mobileLabel });
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+    const moreItem = list.createEl("li");
+    const more = moreItem.createEl("button");
+    more.type = "button";
+    more.dataset.vcFocus = "mobile-more";
+    more.setAttr("aria-expanded", String(this.moreOpen));
+    more.setAttr("aria-controls", `vc-control-more-${this.instanceId}`);
+    if (activeRoute === "tools" || activeRoute === "system") more.setAttr("aria-current", "page");
+    const moreIcon = more.createSpan();
+    moreIcon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(moreIcon, "ellipsis");
+    more.createSpan({ text: "More" });
+    more.addEventListener("click", () => {
+      this.moreOpen = !this.moreOpen;
+      const panel2 = this.contentEl.querySelector(`#vc-control-more-${this.instanceId}`);
+      panel2?.toggleClass("is-open", this.moreOpen);
+      panel2?.setAttr("data-open", String(this.moreOpen));
+      more.setAttr("aria-expanded", String(this.moreOpen));
+    });
+    const panel = nav.createDiv({
+      cls: `vc-control-more-panel${this.moreOpen ? " is-open" : ""}`,
+      attr: { id: `vc-control-more-${this.instanceId}`, "data-open": String(this.moreOpen) }
+    });
+    for (const route of ROUTE_DEFINITIONS.filter((candidate) => !candidate.mobilePrimary)) {
+      const button = panel.createEl("button", { text: route.label });
+      button.type = "button";
+      button.dataset.vcFocus = `more-route-${route.id}`;
+      if (route.id === activeRoute) button.setAttr("aria-current", "page");
+      button.addEventListener("click", () => void this.navigate(route.id));
+    }
+  }
+  renderRoute(container, route, live) {
+    switch (route) {
+      case "home":
+        this.renderLiveSummary(container, live);
+        this.renderLiveEdgeRouter(container, live);
+        this.renderFavorites(container);
+        this.renderRecentActions(container, 5);
+        this.renderRouteActions(container, route, /* @__PURE__ */ new Set([
+          "open-latest-played",
+          "open-current-state",
+          "open-current-leads"
+        ]));
+        return;
+      case "world":
+        this.renderEntityNavigator(container);
+        this.renderRouteActions(container, route);
+        return;
+      case "system":
+        this.renderRouteActions(container, route);
+        this.renderCapabilityInventory(container);
+        this.renderContextPolicy(container);
+        this.renderHealth(container);
+        this.renderRecentActions(container, 20);
+        this.renderTransactions(container);
+        this.renderRecentRuns(container);
+        return;
+      default:
+        this.renderRouteActions(container, route);
+    }
+  }
+  renderContext(container, live) {
+    const scrim = container.createDiv({
+      cls: `vc-control-context-scrim${this.contextOpen ? " is-open" : ""}`,
+      attr: { "data-open": String(this.contextOpen), "aria-hidden": "true" }
+    });
+    scrim.addEventListener("click", () => this.closeContext(true));
+    const aside = container.createEl("aside", {
+      cls: `vc-control-context${this.contextOpen ? " is-open" : ""}`,
+      attr: {
+        id: `vc-control-context-${this.instanceId}`,
+        "data-open": String(this.contextOpen),
+        "aria-label": "Observed campaign context",
+        role: this.contextOpen ? "dialog" : "complementary",
+        ...this.contextOpen ? { "aria-modal": "true" } : {}
+      }
+    });
+    const header = aside.createEl("header");
+    header.createEl("h2", { text: "Observed context" });
+    const close = header.createEl("button", { cls: "vc-control-context-close" });
+    close.type = "button";
+    close.dataset.vcFocus = "context-close";
+    close.setAttr("aria-label", "Close observed context");
+    const closeIcon = close.createSpan();
+    closeIcon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(closeIcon, "x");
+    close.addEventListener("click", () => this.closeContext(true));
+    const truth = aside.createEl("section", { cls: "vc-control-context-section" });
+    truth.createEl("h3", { text: "Live truth" });
+    const truthList = truth.createEl("dl");
+    this.addMetric(truthList, "Latest", live.latestLabel);
+    this.addMetric(truthList, "Deployment", live.deploymentMode);
+    this.addMetric(truthList, "Next", live.nextSession === null ? "Not declared" : `Session ${live.nextSession}`);
+    this.addMetric(truthList, "Lead tasks", String(live.openLeadTasks));
+    const room = aside.createEl("section", { cls: "vc-control-context-section" });
+    room.createEl("h3", { text: "Explicit active room" });
+    room.createEl("strong", { text: live.activeSessionName ?? "Not selected" });
+    room.createEl("code", { text: live.activeSessionRoom ?? "No plugin-local room is active." });
+    const policy = aside.createEl("section", { cls: "vc-control-context-section" });
+    policy.createEl("h3", { text: "Guardrails" });
+    policy.createEl("p", {
+      text: `${this.plugin.settings.activeContextProfile}; ${CAPABILITY_POLICY.aiWriteMode}; ${CAPABILITY_POLICY.canonPromotion}.`
+    });
+  }
+  async navigate(route, pushHistory = true, focusTarget) {
+    if (pushHistory) this.routeHistory.push(route);
+    this.contextOpen = false;
+    this.moreOpen = false;
+    await this.plugin.setActiveRoute(route);
+    const target = focusTarget ? this.contentEl.querySelector(`[data-vc-section="${focusTarget}"]`) : null;
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+      target.focus({ preventScroll: true });
+    } else {
+      this.contentEl.scrollTop = 0;
+      this.focusRouteHeading();
+    }
+    const definition = ROUTE_DEFINITIONS.find((candidate) => candidate.id === route);
+    this.announce(`${definition?.label ?? route} route opened.`);
+  }
+  openCommandSearch(opener) {
+    this.announce("Command search opened.");
+    this.plugin.openCommandSearch(opener, (message) => this.announce(message));
+  }
+  openContext() {
+    this.contextOpen = true;
+    const aside = this.contentEl.querySelector(`#vc-control-context-${this.instanceId}`);
+    const scrim = this.contentEl.querySelector(".vc-control-context-scrim");
+    aside?.addClass("is-open");
+    aside?.setAttr("data-open", "true");
+    aside?.setAttr("role", "dialog");
+    aside?.setAttr("aria-modal", "true");
+    scrim?.addClass("is-open");
+    scrim?.setAttr("data-open", "true");
+    this.contextTrigger?.setAttr("aria-expanded", "true");
+    window.setTimeout(() => aside?.querySelector(".vc-control-context-close")?.focus(), 0);
+  }
+  closeContext(restoreFocus) {
+    this.contextOpen = false;
+    const aside = this.contentEl.querySelector(`#vc-control-context-${this.instanceId}`);
+    const scrim = this.contentEl.querySelector(".vc-control-context-scrim");
+    aside?.removeClass("is-open");
+    aside?.setAttr("data-open", "false");
+    aside?.setAttr("role", "complementary");
+    aside?.removeAttribute("aria-modal");
+    scrim?.removeClass("is-open");
+    scrim?.setAttr("data-open", "false");
+    this.contextTrigger?.setAttr("aria-expanded", "false");
+    if (restoreFocus) window.setTimeout(() => this.contextTrigger?.focus({ preventScroll: true }), 0);
+  }
+  trapContextFocus(event) {
+    const aside = this.contentEl.querySelector(`#vc-control-context-${this.instanceId}`);
+    if (!aside) return false;
+    const focusable = [...aside.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter(
+      (element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (!first || !last) return false;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !aside.contains(active))) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && (active === last || !aside.contains(active))) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+  reconcileContextPresentation() {
+    if (!this.contextOpen) return;
+    const aside = this.contentEl.querySelector(`#vc-control-context-${this.instanceId}`);
+    const close = aside?.querySelector(".vc-control-context-close");
+    if (!aside || !close || window.getComputedStyle(close).display !== "none") return;
+    const restoreHeading = aside.contains(document.activeElement);
+    this.closeContext(false);
+    if (restoreHeading) window.setTimeout(() => this.focusRouteHeading(), 0);
+    this.announce("Observed context changed from a modal drawer to the persistent context pane.");
+  }
+  focusRouteHeading() {
+    this.contentEl.querySelector(`#vc-control-route-heading-${this.instanceId}`)?.focus({ preventScroll: true });
+  }
+  restoreFocus(key) {
+    const target = [...this.contentEl.querySelectorAll("[data-vc-focus]")].find(
+      (element) => element.dataset.vcFocus === key
+    );
+    if (target) window.setTimeout(() => target.focus({ preventScroll: true }), 0);
+  }
+  addMetric(container, label, value) {
+    const item = container.createDiv({ cls: "vc-control-metric" });
+    item.createEl("dt", { text: label });
+    item.createEl("dd", { text: value });
+  }
+  renderLiveSummary(container, live) {
+    const header = container.createEl("section", { cls: "vc-control-hero", attr: { "aria-label": "Campaign summary" } });
+    const identity = header.createDiv({ cls: "vc-control-identity" });
+    identity.createDiv({ cls: "vc-control-eyebrow", text: "LOCAL / OBSERVED / NO INFERENCE" });
+    identity.createEl("h2", { text: "Campaign systems online" });
+    identity.createEl("p", { text: "Canonical notes, installed capabilities, and reviewed local automation in one shell." });
     const telemetry = header.createEl("dl", { cls: "vc-control-telemetry" });
     this.addMetric(telemetry, "Latest played", live.latestLabel);
     this.addMetric(telemetry, "Deployment", live.deploymentMode);
     this.addMetric(telemetry, "Next session", live.nextSession === null ? "NOT DECLARED" : `SESSION ${live.nextSession}`);
     this.addMetric(telemetry, "Open lead tasks", String(live.openLeadTasks));
     this.addMetric(telemetry, "Active room", live.activeSessionName ?? "NOT SELECTED");
-    this.renderLiveEdgeRouter(contentEl, live);
-    const toolbar = contentEl.createEl("nav", {
-      cls: "vc-control-toolbar",
-      attr: { "aria-label": "Control plane filters and primary actions" }
-    });
-    const filterLabel = toolbar.createEl("label", { cls: "vc-control-filter" });
-    filterLabel.createSpan({ text: "Filter controls" });
-    const filterInput = filterLabel.createEl("input", {
-      type: "search",
-      placeholder: "Search actions\u2026",
-      value: this.filter
-    });
-    filterInput.addEventListener("input", () => {
-      this.filter = filterInput.value;
-      this.applyFilter(contentEl);
-    });
-    const refresh = toolbar.createEl("button", { cls: "vc-control-icon-button" });
-    refresh.type = "button";
-    refresh.setAttr("aria-label", "Refresh control plane state");
-    refresh.setAttr("title", "Refresh control plane state");
-    (0, import_obsidian2.setIcon)(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => void this.render());
-    const main = contentEl.createEl("main", { cls: "vc-control-main" });
-    for (const group of GROUPS) this.renderGroup(main, group);
-    this.renderContextPolicy(contentEl);
-    this.renderHealth(contentEl);
-    this.renderTransactions(contentEl);
-    this.renderRecentRuns(contentEl);
-    this.applyFilter(contentEl);
-  }
-  scrollToSection(section) {
-    const target = this.contentEl.querySelector(`[data-vc-section="${section}"]`);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    target?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
-    target?.focus({ preventScroll: true });
-  }
-  addMetric(container, label, value) {
-    const item = container.createDiv({ cls: "vc-control-metric" });
-    item.createEl("dt", { text: label });
-    item.createEl("dd", { text: value });
   }
   renderLiveEdgeRouter(container, live) {
     const section = container.createEl("section", {
@@ -1863,17 +2951,185 @@ var ControlPlaneView = class extends import_obsidian2.ItemView {
     const actions = section.createDiv({ cls: "vc-control-router-actions" });
     for (const id of ["open-latest-played", "open-current-state", "open-current-leads", "set-active-session-room"]) {
       const action = ACTION_BY_ID.get(id);
-      if (action) actions.appendChild(this.plugin.createActionButton(action, "view"));
+      if (action) this.renderActionShell(actions, action, true, "router");
     }
   }
-  renderGroup(container, group) {
+  renderRouteActions(container, route, excluded = /* @__PURE__ */ new Set()) {
+    const actions = CONTROL_ACTIONS.filter((action) => action.route === route && !excluded.has(action.id));
     const section = container.createEl("section", { cls: "vc-control-section" });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: group });
-    heading.createSpan({ text: `${CONTROL_ACTIONS.filter((action) => action.group === group).length} controls` });
+    heading.createEl("h2", { text: "Route actions" });
+    heading.createSpan({ text: `${actions.length} compiled controls` });
     const grid = section.createDiv({ cls: "vc-control-grid" });
-    for (const action of CONTROL_ACTIONS.filter((candidate) => candidate.group === group)) {
-      grid.appendChild(this.plugin.createActionButton(action, "view"));
+    for (const action of actions) {
+      this.renderActionShell(grid, action, false, `route-${route}`);
+    }
+  }
+  renderActionShell(container, action, compact, scope) {
+    const shell = container.createDiv({ cls: "vc-control-action-shell" });
+    shell.appendChild(this.plugin.createActionButton(action, "view", `${scope}-${action.id}`, compact));
+    const favorite = shell.createEl("button", { cls: "vc-control-favorite-toggle" });
+    const selected = this.plugin.settings.favoriteActionIds.includes(action.id);
+    favorite.type = "button";
+    favorite.dataset.vcFocus = `favorite-${scope}-${action.id}`;
+    favorite.setAttr("aria-label", `${selected ? "Remove" : "Add"} ${action.title} ${selected ? "from" : "to"} favorites`);
+    favorite.setAttr("aria-pressed", String(selected));
+    const icon = favorite.createSpan();
+    icon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(icon, "star");
+    favorite.addEventListener("click", () => void this.plugin.toggleFavoriteAction(action.id));
+  }
+  renderFavorites(container) {
+    const section = container.createEl("section", { cls: "vc-control-favorites" });
+    const header = section.createEl("header");
+    header.createEl("h2", { text: "Favorites" });
+    header.createSpan({ text: `${this.plugin.settings.favoriteActionIds.length} / 12` });
+    const actions = this.plugin.settings.favoriteActionIds.flatMap((id) => {
+      const action = ACTION_BY_ID.get(id);
+      return action ? [action] : [];
+    });
+    section.toggleClass("is-empty", actions.length === 0);
+    if (actions.length === 0) {
+      section.createEl("p", { cls: "vc-control-empty", text: "Use the star beside any route action to pin it here." });
+      return;
+    }
+    const list = section.createEl("ul", { cls: "vc-control-compact-list" });
+    for (const action of actions) {
+      const item = list.createEl("li");
+      this.renderActionShell(item, action, true, "favorite");
+    }
+  }
+  renderRecentActions(container, limit) {
+    const section = container.createEl("section", { cls: "vc-control-recents" });
+    const header = section.createEl("header");
+    header.createEl("h2", { text: limit === 5 ? "Recent actions" : "Activity stream" });
+    header.createSpan({ text: "Plugin-local metadata only" });
+    const records = this.plugin.settings.recentActions.slice(0, limit);
+    section.toggleClass("is-empty", records.length === 0);
+    if (records.length === 0) {
+      section.createEl("p", { cls: "vc-control-empty", text: "No control-plane action has been attempted yet." });
+      return;
+    }
+    const list = section.createEl("ol", { cls: "vc-control-compact-list" });
+    for (const record of records) {
+      const action = ACTION_BY_ID.get(record.actionId);
+      if (!action) continue;
+      const item = list.createEl("li", { cls: `vc-control-recent-item${record.success ? "" : " is-fail"}` });
+      item.createEl("strong", { text: action.title });
+      item.createEl("time", { text: new Date(record.timestamp).toLocaleString(), attr: { datetime: record.timestamp } });
+      const resultLabel = record.success ? successfulActionReceipt(action).label : "ATTENTION";
+      item.createSpan({ text: `${action.verb} / ${action.route.toUpperCase()} / ${resultLabel}` });
+      item.createEl("code", { text: action.id });
+    }
+  }
+  renderEntityNavigator(container) {
+    const section = container.createEl("section", {
+      cls: "vc-control-section",
+      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-label": "Entity navigator" }
+    });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Entity Navigator" });
+    heading.createSpan({ text: "CACHED FRONTMATTER / FIXED ROOTS" });
+    const index = this.plugin.getEntityIndex();
+    const toolbar = section.createDiv({ cls: "vc-control-entity-toolbar" });
+    const searchLabel = toolbar.createEl("label", { cls: "vc-control-entity-search" });
+    searchLabel.createSpan({ text: "Search entities" });
+    const search = searchLabel.createEl("input", {
+      type: "search",
+      value: this.entityQuery,
+      placeholder: "Title, alias, tag, status, or path"
+    });
+    search.dataset.vcFocus = "entity-search";
+    const filters = toolbar.createDiv({ cls: "vc-control-entity-filters" });
+    const typeLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
+    typeLabel.createSpan({ text: "Type" });
+    const typeSelect = typeLabel.createEl("select");
+    typeSelect.dataset.vcFocus = "entity-type";
+    const statusLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
+    statusLabel.createSpan({ text: "Status" });
+    const statusSelect = statusLabel.createEl("select");
+    statusSelect.dataset.vcFocus = "entity-status";
+    const count = section.createEl("p", { cls: "vc-control-entity-count" });
+    const results = section.createEl("ul", { cls: "vc-control-entity-results" });
+    const update = () => {
+      const filtered = filterEntityIndex(index, {
+        query: this.entityQuery,
+        types: this.entityType ? [this.entityType] : [],
+        statuses: this.entityStatus ? [this.entityStatus] : []
+      });
+      typeSelect.empty();
+      typeSelect.createEl("option", { text: "All types", value: "" });
+      for (const facet of filtered.facets.types) {
+        typeSelect.createEl("option", { text: `${facet.label} (${facet.count})`, value: facet.value });
+      }
+      typeSelect.value = this.entityType;
+      statusSelect.empty();
+      statusSelect.createEl("option", { text: "All statuses", value: "" });
+      for (const facet of filtered.facets.statuses) {
+        statusSelect.createEl("option", { text: `${facet.label} (${facet.count})`, value: facet.value });
+      }
+      if (this.entityStatus && !filtered.facets.statuses.some((facet) => facet.value === this.entityStatus)) {
+        statusSelect.createEl("option", { text: `${this.entityStatus} (0)`, value: this.entityStatus });
+      }
+      statusSelect.value = this.entityStatus;
+      count.setText(
+        filtered.truncated ? `Showing ${filtered.shown} of ${filtered.total} matching entities (render cap ${filtered.limit}).` : `Showing ${filtered.shown} of ${filtered.total} matching entities.`
+      );
+      results.empty();
+      results.toggleClass("is-empty", filtered.items.length === 0);
+      if (filtered.items.length === 0) {
+        results.createEl("li", { text: "No indexed entity matches the current fixed filters." });
+      } else {
+        for (const entry of filtered.items) this.renderEntityResult(results, entry);
+      }
+      this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
+    };
+    search.addEventListener("input", () => {
+      this.entityQuery = search.value;
+      update();
+    });
+    typeSelect.addEventListener("change", () => {
+      this.entityType = ENTITY_TYPES.includes(typeSelect.value) ? typeSelect.value : "";
+      update();
+    });
+    statusSelect.addEventListener("change", () => {
+      this.entityStatus = statusSelect.value;
+      update();
+    });
+    update();
+  }
+  renderEntityResult(container, entry) {
+    const item = container.createEl("li");
+    const button = item.createEl("button", { cls: "vc-control-entity-result" });
+    button.type = "button";
+    button.dataset.vcFocus = `entity-${entry.path}`;
+    const copy = button.createSpan({ cls: "vc-control-entity-result-copy" });
+    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title });
+    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path });
+    const badges = button.createSpan({ cls: "vc-control-entity-badges" });
+    badges.createSpan({ cls: "vc-control-entity-badge", text: entry.type.toUpperCase() });
+    if (entry.status) badges.createSpan({ cls: "vc-control-entity-badge", text: entry.status });
+    if (entry.audience) badges.createSpan({ cls: "vc-control-entity-badge", text: `AUDIENCE ${entry.audience}` });
+    if (entry.canonStatus) badges.createSpan({ cls: "vc-control-entity-badge", text: `CANON ${entry.canonStatus}` });
+    button.addEventListener("click", () => void this.plugin.openEntityPath(entry.path));
+  }
+  renderCapabilityInventory(container) {
+    const section = container.createEl("section", { cls: "vc-control-health", attr: { "aria-label": "Capability inventory" } });
+    const heading = section.createDiv({ cls: "vc-control-section-heading" });
+    heading.createEl("h2", { text: "Capability inventory" });
+    heading.createSpan({ text: "COMPILED ADAPTERS / FAIL CLOSED" });
+    const list = section.createEl("ul", { cls: "vc-control-health-list" });
+    for (const action of CONTROL_ACTIONS.filter(
+      (candidate) => ["command", "integration", "script", "external"].includes(candidate.kind)
+    )) {
+      const availability = this.plugin.getAvailability(action);
+      const item = list.createEl("li", { cls: availability.available ? "is-pass" : "is-attention" });
+      item.createEl("span", {
+        cls: "vc-control-health-state",
+        text: availability.available ? "AVAILABLE" : "UNAVAILABLE"
+      });
+      item.createEl("strong", { text: action.title });
+      item.createSpan({ text: availability.reason ?? `${action.kind.toUpperCase()} adapter is available.` });
     }
   }
   renderRecentRuns(container) {
@@ -1920,13 +3176,14 @@ var ControlPlaneView = class extends import_obsidian2.ItemView {
     for (const profile of CONTEXT_PROFILES) {
       const card = profiles.createEl("button", { cls: "vc-control-profile" });
       card.type = "button";
+      card.dataset.vcFocus = `context-profile-${profile.id}`;
       card.toggleClass("is-active", profile.id === this.plugin.settings.activeContextProfile);
       card.setAttr("aria-pressed", String(profile.id === this.plugin.settings.activeContextProfile));
       card.createEl("strong", { text: profile.title });
       card.createEl("small", { text: "Guarded configuration; provider enforcement is not verified." });
       card.createEl("span", { text: profile.description });
       card.createEl("code", { text: `${profile.audiences.join("+")} / ${profile.retrievalScopes.join("+")}` });
-      this.plugin.registerDomEvent(card, "click", () => void this.plugin.setActiveContextProfile(profile.id));
+      card.addEventListener("click", () => void this.plugin.setActiveContextProfile(profile.id));
     }
   }
   renderHealth(container) {
@@ -1963,19 +3220,8 @@ var ControlPlaneView = class extends import_obsidian2.ItemView {
       item.createEl("code", { text: transaction.id });
     }
   }
-  applyFilter(container) {
-    const query = this.filter.trim().toLowerCase();
-    for (const button of container.querySelectorAll(".vc-control-action")) {
-      const haystack = button.dataset.search ?? "";
-      button.toggleClass("is-filtered", Boolean(query) && !haystack.includes(query));
-    }
-    for (const section of container.querySelectorAll(".vc-control-section")) {
-      const visible = section.querySelector(".vc-control-action:not(.is-filtered)");
-      section.toggleClass("is-filtered", !visible);
-    }
-  }
 };
-var ControlPlaneSettingTab = class extends import_obsidian2.PluginSettingTab {
+var ControlPlaneSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1988,21 +3234,21 @@ var ControlPlaneSettingTab = class extends import_obsidian2.PluginSettingTab {
     containerEl.createEl("p", {
       text: "The plugin never executes commands supplied by notes. Markdown control blocks can reference only compiled action IDs."
     });
-    new import_obsidian2.Setting(containerEl).setName("Automatic workflow profiles").setDesc("Apply existing vcg-dashboard/session/dossier/data/map/handout classes by path and frontmatter without rewriting notes.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Automatic workflow profiles").setDesc("Apply existing vcg-dashboard/session/dossier/data/map/handout classes by path and frontmatter without rewriting notes.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoProfiles).onChange(async (value) => {
         this.plugin.settings.autoProfiles = value;
         await this.plugin.saveSettings();
         this.plugin.applyProfilesToAllLeaves();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Active AI context profile").setDesc("Retrieval policy contract only. Every profile remains read-only toward canonical owners.").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("Active AI context profile").setDesc("Retrieval policy contract only. Every profile remains read-only toward canonical owners.").addDropdown((dropdown) => {
       for (const profile of CONTEXT_PROFILES) dropdown.addOption(profile.id, profile.title);
       dropdown.setValue(this.plugin.settings.activeContextProfile).onChange(async (value) => {
         if (!isContextProfileId(value)) return;
         await this.plugin.setActiveContextProfile(value);
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Explicit active session room").setDesc(
+    new import_obsidian3.Setting(containerEl).setName("Explicit active session room").setDesc(
       this.plugin.settings.activeSessionRoom ? `${this.plugin.settings.activeSessionName ?? "Session room"}: ${this.plugin.settings.activeSessionRoom}` : "Not selected. The plugin will not infer a room from filenames or next_session."
     ).addButton(
       (button) => button.setButtonText("Select").onClick(() => void this.plugin.executeAction("set-active-session-room", "command"))
@@ -2015,26 +3261,26 @@ var ControlPlaneSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.refreshViews();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Open notes in new tabs").setDesc("Keep the control plane visible while opening campaign surfaces.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Open notes in new tabs").setDesc("Keep the control plane visible while opening campaign surfaces.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.openNotesInNewTab).onChange(async (value) => {
         this.plugin.settings.openNotesInNewTab = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Enable local automation").setDesc("Allow the desktop app to call the audited Python wrapper with exact action IDs. Navigation remains available when disabled.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Enable local automation").setDesc("Allow the desktop app to call the audited Python wrapper with exact action IDs. Navigation remains available when disabled.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.automationEnabled).onChange(async (value) => {
         this.plugin.settings.automationEnabled = value;
         await this.plugin.saveSettings();
         await this.plugin.refreshViews();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Confirm process actions").setDesc("Require an in-app confirmation before starting or stopping the local map server.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Confirm process actions").setDesc("Require an in-app confirmation before starting or stopping the local map server.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmScriptActions).onChange(async (value) => {
         this.plugin.settings.confirmScriptActions = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.").addText(
+    new import_obsidian3.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.").addText(
       (text) => text.setPlaceholder(DEFAULT_SETTINGS.mapUrl).setValue(this.plugin.settings.mapUrl).onChange(async (value) => {
         const trimmed = value.trim();
         if (trimmed && isSafeMapUrl(trimmed)) {
@@ -2043,7 +3289,7 @@ var ControlPlaneSettingTab = class extends import_obsidian2.PluginSettingTab {
         }
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Automation timeout").setDesc("Seconds before a foreground audit is terminated. Range: 5\u2013300.").addText(
+    new import_obsidian3.Setting(containerEl).setName("Automation timeout").setDesc("Seconds before a foreground audit is terminated. Range: 5\u2013300.").addText(
       (text) => text.setValue(String(this.plugin.settings.scriptTimeoutSeconds)).onChange(async (value) => {
         const parsed = Number.parseInt(value, 10);
         if (Number.isFinite(parsed) && parsed >= 5 && parsed <= 300) {
@@ -2054,7 +3300,7 @@ var ControlPlaneSettingTab = class extends import_obsidian2.PluginSettingTab {
     );
   }
 };
-var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
+var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   settings = { ...DEFAULT_SETTINGS };
   runningActions = /* @__PURE__ */ new Set();
   profileAssignments = /* @__PURE__ */ new Map();
@@ -2067,6 +3313,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   pendingConfirmationModals = /* @__PURE__ */ new Set();
   pendingWorkflowModals = /* @__PURE__ */ new Set();
   pendingProposalModals = /* @__PURE__ */ new Set();
+  pendingCommandSearchModals = /* @__PURE__ */ new Set();
+  commandSearchRefreshPending = false;
+  entityIndex = null;
   transactionInProgress = false;
   refreshTimer = null;
   statusButton = null;
@@ -2110,9 +3359,28 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (file.path === CURRENT_STATE_PATH || file.path === CURRENT_LEADS_PATH) this.scheduleRefresh();
+        if (deriveEntityType(file.path)) this.invalidateEntityIndex();
       })
     );
-    this.app.workspace.onLayoutReady(() => this.scheduleRefresh(0));
+    this.app.workspace.onLayoutReady(() => {
+      if (this.unloading) return;
+      this.registerEvent(
+        this.app.vault.on("create", (file) => {
+          if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", (file) => {
+          if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("rename", (file, oldPath) => {
+          if (this.isEntityScopePath(file.path) || this.isEntityScopePath(oldPath)) this.invalidateEntityIndex();
+        })
+      );
+      this.scheduleRefresh(0);
+    });
   }
   onunload() {
     this.unloading = true;
@@ -2123,6 +3391,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     this.pendingWorkflowModals.clear();
     for (const modal of this.pendingProposalModals) modal.close();
     this.pendingProposalModals.clear();
+    for (const modal of this.pendingCommandSearchModals) modal.close();
+    this.pendingCommandSearchModals.clear();
+    this.commandSearchRefreshPending = false;
     for (const child of this.activeChildren) {
       if (!child.killed) child.kill("SIGTERM");
     }
@@ -2134,6 +3405,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   async loadSettings() {
     const saved = asRecord(await this.loadData());
+    const actionIds = ACTION_BY_ID.keys();
     const timeout = Math.min(300, Math.max(5, Number(saved.scriptTimeoutSeconds) || DEFAULT_SETTINGS.scriptTimeoutSeconds));
     const outputLimit = Math.min(
       5e4,
@@ -2164,6 +3436,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
       activeSessionRoom,
       activeSessionName,
       activeContextProfile: isContextProfileId(saved.activeContextProfile) ? saved.activeContextProfile : DEFAULT_SETTINGS.activeContextProfile,
+      activeRoute: isPrimaryRoute(saved.activeRoute) ? saved.activeRoute : DEFAULT_SETTINGS.activeRoute,
+      favoriteActionIds: normalizeFavoriteActionIds(saved.favoriteActionIds, actionIds),
+      recentActions: normalizeRecentActions(saved.recentActions, ACTION_BY_ID.keys()),
       recentRuns: recentRuns.slice(0, 8).map((run) => ({
         ...run,
         output: this.redactLocalOutput(run.output).slice(-outputLimit)
@@ -2185,27 +3460,114 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
-    if (section && leaf.view instanceof ControlPlaneView) leaf.view.scrollToSection(section);
+    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+  }
+  async setActiveRoute(route) {
+    if (!isPrimaryRoute(route)) return;
+    this.settings.activeRoute = route;
+    await this.saveSettings();
+    await this.refreshViews();
   }
   async setActiveContextProfile(profile) {
     this.settings.activeContextProfile = profile;
     await this.saveSettings();
-    await this.refreshViews();
+    await this.refreshViews(`Context profile changed to ${profile}.`);
   }
-  async refreshViews() {
+  async refreshViews(announcement) {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       const view = leaf.view;
-      if (view instanceof ControlPlaneView) await view.render();
+      if (view instanceof ControlPlaneView) await view.render(announcement);
     }
     await this.updateStatusButton();
   }
   scheduleRefresh(delay = 80) {
+    if (this.unloading) return;
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
+      if (this.unloading) return;
       this.applyProfilesToAllLeaves();
-      void this.refreshViews();
+      void this.refreshViews("Control plane state refreshed.");
     }, delay);
+  }
+  openCommandSearch(opener, announce) {
+    let modal;
+    modal = new ControlActionSearchModal(this.app, {
+      actions: CONTROL_ACTIONS,
+      favoriteActionIds: this.settings.favoriteActionIds,
+      recentActions: this.settings.recentActions,
+      opener,
+      getAvailability: (action) => this.getAvailability(action),
+      onChoose: (action) => void this.executeAction(action.id, "view"),
+      onUnavailable: (action, reason) => {
+        new import_obsidian3.Notice(reason, 7e3);
+        void this.tryRecordRecentAction(action.id, false);
+        announce(`${action.title} is unavailable. ${reason}`);
+      },
+      onDismiss: () => {
+        this.pendingCommandSearchModals.delete(modal);
+        announce("Command search closed.");
+        if (this.pendingCommandSearchModals.size === 0 && this.commandSearchRefreshPending) {
+          this.commandSearchRefreshPending = false;
+          window.setTimeout(() => {
+            if (!this.unloading) void this.refreshViews();
+          }, 50);
+        }
+      }
+    });
+    this.pendingCommandSearchModals.add(modal);
+    modal.open();
+  }
+  async toggleFavoriteAction(actionId) {
+    if (!ACTION_BY_ID.has(actionId)) return;
+    const selected = this.settings.favoriteActionIds.includes(actionId);
+    if (!selected && this.settings.favoriteActionIds.length >= 12) {
+      new import_obsidian3.Notice("Favorites are limited to 12 compiled actions.", 6e3);
+      this.announceToViews("Favorites remain unchanged; the 12-action limit is reached.");
+      return;
+    }
+    const next = selected ? this.settings.favoriteActionIds.filter((candidate) => candidate !== actionId) : [...this.settings.favoriteActionIds, actionId];
+    this.settings.favoriteActionIds = normalizeFavoriteActionIds(next, ACTION_BY_ID.keys());
+    await this.saveSettings();
+    const title = ACTION_BY_ID.get(actionId)?.title ?? actionId;
+    await this.refreshViews(`${title} ${selected ? "removed from" : "added to"} favorites.`);
+  }
+  getEntityIndex() {
+    if (this.entityIndex) return this.entityIndex;
+    this.entityIndex = buildEntityIndex(
+      this.app.vault.getMarkdownFiles().filter((file) => deriveEntityType(file.path) !== null).map((file) => ({
+        path: file.path,
+        basename: file.basename,
+        frontmatter: asRecord(this.app.metadataCache.getFileCache(file)?.frontmatter)
+      }))
+    );
+    return this.entityIndex;
+  }
+  async openEntityPath(path) {
+    if (!deriveEntityType(path)) {
+      new import_obsidian3.Notice("Entity navigation blocked a path outside the compiled roots.", 7e3);
+      return;
+    }
+    try {
+      await this.openFile(this.fileAt(path));
+    } catch (error) {
+      new import_obsidian3.Notice(error instanceof Error ? error.message : String(error), 7e3);
+    }
+  }
+  invalidateEntityIndex() {
+    this.entityIndex = null;
+    if (this.settings.activeRoute === "world") this.scheduleRefresh();
+  }
+  isEntityScopePath(path) {
+    if (deriveEntityType(path)) return true;
+    return ENTITY_ROOT_REGISTRY.some(
+      ({ root }) => path === root || path.startsWith(`${root}/`) || root.startsWith(`${path}/`)
+    );
+  }
+  announceToViews(message) {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof ControlPlaneView) leaf.view.announce(message);
+    }
   }
   async readLiveState() {
     const stateFile = this.fileAt(CURRENT_STATE_PATH);
@@ -2231,33 +3593,55 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     const content = await this.app.vault.cachedRead(file);
     return (content.match(/^\s*[-*]\s+\[ \]\s+/gm) ?? []).length;
   }
-  createActionButton(action, source) {
+  createActionButton(action, source, focusKey, compact = false) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "vc-control-action";
+    button.toggleClass("is-compact", compact);
     button.dataset.action = action.id;
-    button.dataset.search = `${action.id} ${action.title} ${action.description} ${action.group}`.toLowerCase();
+    if (focusKey) button.dataset.vcFocus = focusKey;
+    button.dataset.search = [
+      action.id,
+      action.title,
+      action.description,
+      action.group,
+      action.route,
+      action.verb,
+      ...action.keywords ?? []
+    ].join(" ").toLowerCase();
     const availability = this.getAvailability(action);
+    const running = this.runningActions.has(action.id);
+    const titleId = `vc-control-action-title-${crypto.randomUUID()}`;
+    const descriptionId = `vc-control-action-description-${crypto.randomUUID()}`;
+    const reasonId = availability.reason ? `vc-control-action-reason-${crypto.randomUUID()}` : null;
     button.setAttribute("aria-disabled", String(!availability.available));
-    button.setAttribute(
-      "aria-label",
-      `${action.title}. ${action.description}${availability.reason ? ` Unavailable: ${availability.reason}` : ""}`
-    );
+    button.setAttribute("aria-busy", String(running));
+    button.setAttribute("aria-labelledby", titleId);
+    button.setAttribute("aria-describedby", [descriptionId, reasonId].filter(Boolean).join(" "));
     if (availability.reason) button.setAttribute("title", availability.reason);
     const icon = button.createSpan({ cls: "vc-control-action-icon" });
-    (0, import_obsidian2.setIcon)(icon, this.runningActions.has(action.id) ? "loader-circle" : action.icon);
+    icon.setAttr("aria-hidden", "true");
+    (0, import_obsidian3.setIcon)(icon, running ? "loader-circle" : action.icon);
     const copy = button.createSpan({ cls: "vc-control-action-copy" });
-    copy.createSpan({ cls: "vc-control-action-title", text: action.title });
+    copy.createSpan({ cls: "vc-control-action-title", text: action.title, attr: { id: titleId } });
     copy.createSpan({
       cls: "vc-control-action-description",
-      text: availability.reason ?? action.description
+      text: action.description,
+      attr: { id: descriptionId }
     });
+    if (availability.reason && reasonId) {
+      copy.createSpan({
+        cls: "vc-control-action-reason",
+        text: `${availability.available ? "Fallback" : "Unavailable"}: ${availability.reason}`,
+        attr: { id: reasonId }
+      });
+    }
     const state = button.createSpan({
       cls: "vc-control-action-state",
-      text: this.runningActions.has(action.id) ? "RUNNING" : availability.available ? source === "block" ? "RUN" : "OPEN" : "OFFLINE"
+      text: running ? "RUNNING" : availability.available ? action.verb : "UNAVAILABLE"
     });
-    if (this.runningActions.has(action.id)) button.addClass("is-running");
-    this.registerDomEvent(button, "click", () => void this.executeAction(action.id, source));
+    if (running) button.addClass("is-running");
+    button.addEventListener("click", () => void this.executeAction(action.id, source));
     return button;
   }
   renderControlBlock(source, element) {
@@ -2289,7 +3673,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   getAvailability(action) {
     if (this.runningActions.has(action.id)) return { available: false, reason: "Action is already running." };
-    if (action.desktopOnly && !import_obsidian2.Platform.isDesktopApp) return { available: false, reason: "Desktop Obsidian is required." };
+    if (action.desktopOnly && !import_obsidian3.Platform.isDesktopApp) return { available: false, reason: "Desktop Obsidian is required." };
     switch (action.kind) {
       case "note":
         return this.fileAt(action.target ?? "") ? { available: true } : { available: false, reason: `Missing note: ${action.target ?? "unknown"}` };
@@ -2309,10 +3693,10 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
         return this.settings.activeSessionRoom && this.settings.activeSessionName ? { available: true } : { available: false, reason: "Select an explicit active session room first." };
       case "script":
         if (!this.settings.automationEnabled) return { available: false, reason: "Local automation is disabled in plugin settings." };
-        if (!import_obsidian2.Platform.isMacOS) {
+        if (!import_obsidian3.Platform.isMacOS) {
           return { available: false, reason: "The reviewed automation wrapper currently requires macOS/POSIX process tools." };
         }
-        if (!(this.app.vault.adapter instanceof import_obsidian2.FileSystemAdapter)) {
+        if (!(this.app.vault.adapter instanceof import_obsidian3.FileSystemAdapter)) {
           return { available: false, reason: "The vault has no local filesystem adapter." };
         }
         return this.fileAt(VAULT_PATHS.controlWrapper) ? { available: true } : { available: false, reason: `Missing ${VAULT_PATHS.controlWrapper}.` };
@@ -2325,20 +3709,24 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   async executeAction(actionId, source) {
     const action = ACTION_BY_ID.get(actionId);
     if (!action) {
-      new import_obsidian2.Notice(`Veiled Chicago Control Plane: unknown action '${actionId || "(empty)"}'.`);
+      new import_obsidian3.Notice(`Veiled Chicago Control Plane: unknown action '${actionId || "(empty)"}'.`);
       return;
     }
     const protocolBlock = this.protocolBlockReason(action, source);
     if (protocolBlock) {
-      new import_obsidian2.Notice(protocolBlock);
+      new import_obsidian3.Notice(protocolBlock);
+      await this.tryRecordRecentAction(action.id, false);
+      this.announceToViews(`${action.title} was blocked by protocol policy.`);
       return;
     }
     const availability = this.getAvailability(action);
     if (!availability.available) {
-      new import_obsidian2.Notice(availability.reason ?? `${action.title} is unavailable.`);
+      new import_obsidian3.Notice(availability.reason ?? `${action.title} is unavailable.`);
+      await this.tryRecordRecentAction(action.id, false);
+      this.announceToViews(`${action.title} is unavailable. ${availability.reason ?? ""}`.trim());
       return;
     }
-    if (action.confirm && this.settings.confirmScriptActions) {
+    if (action.confirm && (action.id === "start-audio-recorder" || this.settings.confirmScriptActions)) {
       let modal;
       modal = new ConfirmActionModal(
         this.app,
@@ -2347,31 +3735,69 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
           if (this.unloading) return;
           const currentProtocolBlock = this.protocolBlockReason(action, source);
           if (currentProtocolBlock) {
-            new import_obsidian2.Notice(currentProtocolBlock);
+            new import_obsidian3.Notice(currentProtocolBlock);
+            void this.tryRecordRecentAction(action.id, false);
             return;
           }
           const currentAvailability = this.getAvailability(action);
           if (!currentAvailability.available) {
-            new import_obsidian2.Notice(currentAvailability.reason ?? `${action.title} is unavailable.`);
+            new import_obsidian3.Notice(currentAvailability.reason ?? `${action.title} is unavailable.`);
+            void this.tryRecordRecentAction(action.id, false);
             return;
           }
-          void this.performAction(action).catch((error) => this.reportActionError(action.title, error));
+          void this.performAndRecordAction(action);
         },
-        () => this.pendingConfirmationModals.delete(modal)
+        (confirmed) => {
+          this.pendingConfirmationModals.delete(modal);
+          if (confirmed || this.unloading) return;
+          void this.tryRecordRecentAction(action.id, false);
+          this.announceToViews(`${action.title} was canceled.`);
+        }
       );
       this.pendingConfirmationModals.add(modal);
       modal.open();
       return;
     }
+    await this.performAndRecordAction(action);
+  }
+  async performAndRecordAction(action) {
     try {
       await this.performAction(action);
+      const success = action.kind !== "script" || this.settings.recentRuns.find((record) => record.actionId === action.id)?.ok === true;
+      await this.tryRecordRecentAction(action.id, success);
+      const outcome = success ? successfulActionReceipt(action).announcement : "attention required";
+      this.announceToViews(`${action.title}: ${outcome}.`);
     } catch (error) {
+      await this.tryRecordRecentAction(action.id, false);
       this.reportActionError(action.title, error);
+    }
+  }
+  async tryRecordRecentAction(actionId, success) {
+    try {
+      await this.recordRecentAction(actionId, success);
+    } catch (error) {
+      new import_obsidian3.Notice(
+        `Activity receipt could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        1e4
+      );
+    }
+  }
+  async recordRecentAction(actionId, success) {
+    this.settings.recentActions = normalizeRecentActions(
+      [{ actionId, success, timestamp: (/* @__PURE__ */ new Date()).toISOString() }, ...this.settings.recentActions],
+      ACTION_BY_ID.keys()
+    );
+    await this.saveSettings();
+    if (this.pendingCommandSearchModals.size === 0) {
+      await this.refreshViews();
+    } else {
+      this.commandSearchRefreshPending = true;
     }
   }
   reportActionError(title, error) {
     const message = error instanceof Error ? error.message : String(error);
-    new import_obsidian2.Notice(`${title}: ${message}`, 12e3);
+    new import_obsidian3.Notice(`${title}: ${message}`, 12e3);
+    this.announceToViews(`${title} failed. ${message}`);
   }
   async performAction(action) {
     switch (action.kind) {
@@ -2388,12 +3814,14 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
       }
       case "command":
         if (!action.target || !this.executeCommand(action.target)) {
-          new import_obsidian2.Notice(`Could not execute ${action.title}.`);
+          throw new Error(`Could not execute the fixed command adapter for ${action.title}.`);
         }
         break;
       case "integration":
         if (action.target && this.commandAvailable(action.target)) {
-          this.executeCommand(action.target);
+          if (!this.executeCommand(action.target)) {
+            throw new Error(`Could not execute the fixed integration adapter for ${action.title}.`);
+          }
         } else {
           openExternalUrl(this.settings.mapUrl);
         }
@@ -2411,12 +3839,13 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   async openFile(file) {
     if (!file) {
-      new import_obsidian2.Notice("The requested campaign note could not be resolved.");
-      return;
+      throw new Error("The requested campaign note could not be resolved.");
     }
-    const existing = this.app.workspace.getLeavesOfType("markdown").find((leaf2) => {
+    let existing = null;
+    this.app.workspace.iterateAllLeaves((leaf2) => {
+      if (existing) return;
       const view = leaf2.view;
-      return view instanceof import_obsidian2.MarkdownView && view.file?.path === file.path;
+      if (view instanceof import_obsidian3.FileView && view.file?.path === file.path) existing = leaf2;
     });
     if (existing) {
       await this.app.workspace.revealLeaf(existing);
@@ -2547,7 +3976,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
         this.openTranscriptionRequest();
         return;
       default:
-        new import_obsidian2.Notice(`Unknown workflow action: ${id}`);
+        new import_obsidian3.Notice(`Unknown workflow action: ${id}`);
     }
   }
   openManagedNoteWizard() {
@@ -2644,7 +4073,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
         this.settings.activeSessionName = displayName;
         await this.saveSettings();
         await this.refreshViews();
-        new import_obsidian2.Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7e3);
+        new import_obsidian3.Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7e3);
       }
     );
   }
@@ -2658,11 +4087,11 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     });
     const operations = proposal.operations.filter((operation) => {
       const existing = this.app.vault.getAbstractFileByPath(operation.path);
-      if (existing instanceof import_obsidian2.TFolder) throw new Error(`A folder blocks scaffold file: ${operation.path}`);
-      return !(existing instanceof import_obsidian2.TFile);
+      if (existing instanceof import_obsidian3.TFolder) throw new Error(`A folder blocks scaffold file: ${operation.path}`);
+      return !(existing instanceof import_obsidian3.TFile);
     });
     if (operations.length === 0) {
-      new import_obsidian2.Notice(`${active.displayName} already contains every scaffold file; nothing was proposed.`, 7e3);
+      new import_obsidian3.Notice(`${active.displayName} already contains every scaffold file; nothing was proposed.`, 7e3);
       return;
     }
     this.reviewProposal({
@@ -2780,7 +4209,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     const active = this.requireActiveSession();
     const audioFiles = this.app.vault.getFiles().filter((file) => APPROVED_AUDIO_EXTENSIONS.has(file.extension.toLowerCase())).sort((left, right) => left.path.localeCompare(right.path));
     if (audioFiles.length === 0) {
-      new import_obsidian2.Notice("No approved audio file exists in the vault. Nothing was selected or executed.", 8e3);
+      new import_obsidian3.Notice("No approved audio file exists in the vault. Nothing was selected or executed.", 8e3);
       return;
     }
     const options = Object.fromEntries(audioFiles.map((file) => [file.path, file.path]));
@@ -2860,10 +4289,10 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
         const baseline = proposal.targetBaselines[index];
         if (!baseline) throw new Error(`Reviewed target baseline is missing: ${operation.path}`);
         const target = this.app.vault.getAbstractFileByPath(operation.path);
-        const targetKind = target instanceof import_obsidian2.TFile ? "file" : target instanceof import_obsidian2.TFolder ? "folder" : "missing";
-        const contents = target instanceof import_obsidian2.TFile ? await this.app.vault.read(target) : null;
-        const mtime = target instanceof import_obsidian2.TFile ? target.stat.mtime : null;
-        const size = target instanceof import_obsidian2.TFile ? target.stat.size : null;
+        const targetKind = target instanceof import_obsidian3.TFile ? "file" : target instanceof import_obsidian3.TFolder ? "folder" : "missing";
+        const contents = target instanceof import_obsidian3.TFile ? await this.app.vault.read(target) : null;
+        const mtime = target instanceof import_obsidian3.TFile ? target.stat.mtime : null;
+        const size = target instanceof import_obsidian3.TFile ? target.stat.size : null;
         if (!targetMatchesBaseline(baseline, targetKind, contents, mtime, size)) {
           throw new Error(`Target changed after preview: ${operation.path}`);
         }
@@ -2884,7 +4313,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
           continue;
         }
         const appendTarget = this.app.vault.getAbstractFileByPath(item.operation.path);
-        if (!(appendTarget instanceof import_obsidian2.TFile) || item.operation.kind !== "append") {
+        if (!(appendTarget instanceof import_obsidian3.TFile) || item.operation.kind !== "append") {
           throw new Error(`Reviewed append target changed before execution: ${item.operation.path}`);
         }
         if (appendTarget.stat.mtime !== item.baseline.mtime || appendTarget.stat.size !== item.baseline.size) {
@@ -2910,7 +4339,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
       }
       if (this.unloading) throw new Error("The plugin unloaded before the transaction receipt was recorded.");
       await this.recordTransaction(proposal, true);
-      new import_obsidian2.Notice(`${proposal.title}: applied ${plan.length} reviewed operation(s).`, 7e3);
+      new import_obsidian3.Notice(`${proposal.title}: applied ${plan.length} reviewed operation(s).`, 7e3);
     } catch (error) {
       const rollbackErrors = await this.rollbackProposal(createdFiles, appends);
       try {
@@ -2933,7 +4362,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     let current = "";
     for (const segment of segments) {
       current = current ? `${current}/${segment}` : segment;
-      if (this.app.vault.getAbstractFileByPath(current) instanceof import_obsidian2.TFile) {
+      if (this.app.vault.getAbstractFileByPath(current) instanceof import_obsidian3.TFile) {
         throw new Error(`A file blocks required folder: ${current}`);
       }
     }
@@ -2944,8 +4373,8 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     for (const segment of segments) {
       current = current ? `${current}/${segment}` : segment;
       const existing = this.app.vault.getAbstractFileByPath(current);
-      if (existing instanceof import_obsidian2.TFile) throw new Error(`A file blocks required folder: ${current}`);
-      if (existing instanceof import_obsidian2.TFolder) continue;
+      if (existing instanceof import_obsidian3.TFile) throw new Error(`A file blocks required folder: ${current}`);
+      if (existing instanceof import_obsidian3.TFolder) continue;
       await this.app.vault.createFolder(current);
     }
   }
@@ -3038,7 +4467,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
       };
       this.settings.recentRuns = [record, ...this.settings.recentRuns.filter((run) => run.actionId !== action.id)].slice(0, 8);
       await this.saveSettings();
-      new import_obsidian2.Notice(`${action.title}: ${payload.ok ? "PASS" : "attention required"}.`, payload.ok ? 4e3 : 1e4);
+      new import_obsidian3.Notice(`${action.title}: ${payload.ok ? "PASS" : "attention required"}.`, payload.ok ? 4e3 : 1e4);
     } catch (error) {
       if (this.unloading) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -3054,7 +4483,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
         ...this.settings.recentRuns.filter((run) => run.actionId !== action.id)
       ].slice(0, 8);
       await this.saveSettings();
-      new import_obsidian2.Notice(`${action.title} failed: ${message}`, 12e3);
+      new import_obsidian3.Notice(`${action.title} failed: ${message}`, 12e3);
     } finally {
       this.runningActions.delete(action.id);
       if (!this.unloading) await this.refreshViews();
@@ -3062,7 +4491,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   invokeControlWrapper(scriptId) {
     const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof import_obsidian2.FileSystemAdapter)) return Promise.reject(new Error("Local filesystem access is unavailable."));
+    if (!(adapter instanceof import_obsidian3.FileSystemAdapter)) return Promise.reject(new Error("Local filesystem access is unavailable."));
     const root = adapter.getBasePath();
     const scriptPath = `${root}/${VAULT_PATHS.controlWrapper}`;
     return new Promise((resolve, reject) => {
@@ -3111,7 +4540,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
     this.clearManagedProfiles();
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian2.MarkdownView) || !view.file) continue;
+      if (!(view instanceof import_obsidian3.MarkdownView) || !view.file) continue;
       const frontmatter2 = asRecord(this.app.metadataCache.getFileCache(view.file)?.frontmatter);
       const profiles = this.settings.autoProfiles ? profilesForPath(view.file.path, frontmatter2) : [];
       for (const element of view.containerEl.querySelectorAll(".markdown-preview-view, .markdown-source-view")) {
@@ -3250,7 +4679,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   redactLocalOutput(value) {
     const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof import_obsidian2.FileSystemAdapter)) return value;
+    if (!(adapter instanceof import_obsidian3.FileSystemAdapter)) return value;
     const root = adapter.getBasePath();
     const variants = /* @__PURE__ */ new Set([root, root.replaceAll("\\", "/"), root.replaceAll("/", "\\")]);
     let redacted = value;
@@ -3272,7 +4701,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian2.Plugin {
   }
   fileAt(path) {
     const candidate = this.app.vault.getAbstractFileByPath(path);
-    return candidate instanceof import_obsidian2.TFile ? candidate : null;
+    return candidate instanceof import_obsidian3.TFile ? candidate : null;
   }
   commandManager() {
     const manager = this.app.commands;
