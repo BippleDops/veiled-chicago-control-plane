@@ -1,0 +1,31 @@
+{
+  "name": "veiled-chicago-control-plane",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A secure Obsidian campaign control plane for the Veiled Chicago vault.",
+  "author": "BippleDops",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BippleDops/veiled-chicago-control-plane.git"
+  },
+  "homepage": "https://github.com/BippleDops/veiled-chicago-control-plane#readme",
+  "bugs": {
+    "url": "https://github.com/BippleDops/veiled-chicago-control-plane/issues"
+  },
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "release:check": "node scripts/verify-release.mjs",
+    "verify": "npm run typecheck && npm run build && npm run release:check"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.20",
+    "esbuild": "^0.25.11",
+    "obsidian": "^1.13.0",
+    "tslib": "^2.8.1",
+    "typescript": "^5.7.2"
+  }
+}

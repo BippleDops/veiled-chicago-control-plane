@@ -1,0 +1,10 @@
+{
+  "id": "veiled-chicago-control-plane",
+  "name": "Veiled Chicago Control Plane",
+  "version": "1.0.0",
+  "minAppVersion": "1.13.0",
+  "description": "A secure campaign dashboard, HTML control surfaces, contextual workflow styling, and allowlisted local automation for the Veiled Chicago vault.",
+  "author": "BippleDops",
+  "authorUrl": "https://github.com/BippleDops",
+  "isDesktopOnly": true
+}
