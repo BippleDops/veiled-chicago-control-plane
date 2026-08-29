@@ -68,6 +68,21 @@ const V1_1_ACTION_IDS = [
   "stop-map-server"
 ] as const;
 
+const V1_2_ACTION_IDS = [
+  ...V1_1_ACTION_IDS,
+  "open-command-search",
+  "open-entity-navigator",
+  "open-quick-switcher",
+  "open-bookmarks",
+  "open-workspaces",
+  "save-workspace",
+  "start-audio-recorder",
+  "open-sessions-base",
+  "open-npcs-base",
+  "open-locations-base",
+  "open-review-queue-base"
+] as const;
+
 assert.deepEqual(PRIMARY_ROUTES, ["home", "session", "create", "world", "tools", "system"]);
 assert.equal(new Set(PRIMARY_ROUTES).size, 6);
 assert.deepEqual(
@@ -268,33 +283,32 @@ const currentActionIds = new Set(CONTROL_ACTIONS.map((action) => action.id));
 assert.deepEqual(
   V1_1_ACTION_IDS.filter((id) => !currentActionIds.has(id)),
   [],
-  "Every 1.1 action ID must remain present in 1.2."
+  "Every 1.1 action ID must remain present in 1.3."
 );
-assert.equal(CONTROL_ACTIONS.length, 55);
+assert.equal(V1_2_ACTION_IDS.length, 55);
+assert.equal(new Set(V1_2_ACTION_IDS).size, 55);
+assert.deepEqual(
+  V1_2_ACTION_IDS.filter((id) => !currentActionIds.has(id)),
+  [],
+  "Every 1.2 action ID must remain present in 1.3."
+);
+assert.equal(CONTROL_ACTIONS.length, 56);
 assert.equal(currentActionIds.size, CONTROL_ACTIONS.length);
 assert.equal(validateActionNavigation(CONTROL_ACTIONS).length, CONTROL_ACTIONS.length);
 assert.deepEqual(
   [
-    "open-command-search",
-    "open-entity-navigator",
-    "open-quick-switcher",
-    "open-bookmarks",
-    "open-workspaces",
-    "save-workspace",
-    "start-audio-recorder",
-    "open-sessions-base",
-    "open-npcs-base",
-    "open-locations-base",
-    "open-review-queue-base"
+    "open-omnisearch"
   ].filter((id) => !currentActionIds.has(id)),
   [],
-  "Every 1.2 adapter and application-shell action must be compiled."
+  "The only 1.3 action addition must be compiled."
 );
+assert.deepEqual([...currentActionIds].filter((id) => !(V1_2_ACTION_IDS as readonly string[]).includes(id)), ["open-omnisearch"]);
 assert.equal(ACTION_BY_ID.get("open-quick-switcher")?.target, "switcher:open");
+assert.equal(ACTION_BY_ID.get("open-omnisearch")?.target, "omnisearch:show-modal");
 assert.equal(ACTION_BY_ID.get("open-bookmarks")?.target, "bookmarks:open");
 assert.equal(ACTION_BY_ID.get("open-workspaces")?.target, "workspaces:open-modal");
 assert.equal(ACTION_BY_ID.get("save-workspace")?.target, "workspaces:save");
 assert.equal(ACTION_BY_ID.get("start-audio-recorder")?.target, "audio-recorder:start");
 assert.match(ACTION_BY_ID.get("start-audio-recorder")?.confirm ?? "", /consent/i);
 
-console.log("navigation-tests PASS routes, normalization, history, 44-ID compatibility, and 55-action registry");
+console.log("navigation-tests PASS routes, normalization, history, 55-ID compatibility, and 56-action registry");

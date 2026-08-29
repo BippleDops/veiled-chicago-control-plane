@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 - 2026-08-29
+
+- Add a validated first-party startup surface that reuses an existing Control Plane leaf or opens one tab through a concurrency guard.
+- Preserve all 55 version 1.2 action IDs and add only `open-omnisearch`, bound to the verified `omnisearch:show-modal` command.
+- Group dense route actions by their compiled taxonomy and add an interface-capability registry with owners, local status, and replacement boundaries.
+- Add a non-executable `ad-statblock` Markdown renderer with plain-text titles and neutralized HTML, embeds, fenced processors, Dataview expressions, and Meta Bind directives.
+- Repair narrow-layout More disclosure Escape/focus behavior, status-region semantics, silent ambient refresh, and debounced, explicitly associated entity results.
+- Move leaf-dependent reflow to container queries, remove parent opacity from unavailable controls, correct runtime heading selectors, and add statblock print/forced-color/reduced-transparency support.
+- Add startup, grouping, disclosure, statblock-sanitization, capability, and source-level release-contract tests.
+- Disambiguate the live `Runtime & Tool Health` view from the note-backed `Vault Content Health` dashboard without changing either command ID or target.
+- Generalize the RUN gate to require exactly one source-citing selection authority: a standalone non-code player-declaration marker or exact same-snapshot Current State DM-selected live-handoff fields; incomplete, ambiguous, spoofed, or post-review-changed evidence fails closed without implying player intent.
+
 ## 1.2.0 - 2026-08-29
 
 - Replace the single scrolling dashboard with a responsive six-route application shell and observed-context pane.

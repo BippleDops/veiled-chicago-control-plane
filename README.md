@@ -1,6 +1,6 @@
 # Veiled Chicago Control Plane
 
-A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, automatic workflow profiles, Markdown control blocks, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
+A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, a first-party startup surface, safe Markdown compatibility renderers, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
 
 ## Install with BRAT
 
@@ -25,22 +25,28 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 ## What it does
 
 - Builds a responsive, semantic HTML application shell with Home, Session, Create, World, Tools, and System routes.
-- Registers 55 fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions while retaining all 44 version 1.1 IDs.
+- Registers 56 fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions while retaining all 55 version 1.2 IDs.
 - Provides native fuzzy command search, capped favorites and recents, bounded in-memory route history, and a persistent observed-context pane.
-- Provides a lazy, fixed-root entity navigator over cached frontmatter for NPCs, locations, factions, items, and session records; it does not read note bodies or claim semantic similarity.
+- Opens or reuses exactly one Control Plane leaf at layout ready by default; the validated `startupSurface` setting can leave the saved layout unchanged.
+- Groups dense route actions by their compiled taxonomy and exposes keyboard-operable in-page group links without duplicating actions.
+- Provides a lazy, fixed-root entity navigator over cached frontmatter for NPCs, locations, factions, items, and session records, with debounced search and explicit result relationships; it does not read note bodies or claim semantic similarity.
 - Provides a dynamic Live Edge Router that reads explicit Current State and a separately selected active room without inferring chronology.
 - Creates schema-driven draft notes through preview-bound target baselines and a rollback-aware transaction broker.
-- Scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on declaration evidence, and routes promotion through human review.
+- Scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on exactly one validated selection-evidence authority, and routes promotion through human review.
 - Defines six guarded AI context configurations. They constrain this plugin's surfaces but do not claim provider-side retrieval enforcement.
 - Renders allowlisted `vcg-control` Markdown blocks; note content cannot supply commands, paths, arguments, or shell fragments.
+- Renders legacy `ad-statblock` blocks as labelled, non-executable Markdown after neutralizing HTML, embeds, executable code-block processors, Dataview expressions, and Meta Bind directives.
 - Applies workflow profiles (`vcg-dashboard`, `vcg-session`, `vcg-dossier`, `vcg-data-deck`, `vcg-map-room`, and `vcg-handout`) from the active note's path and frontmatter without editing the note.
-- Integrates through compiled command IDs with Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, Custom Frames, and Lean Terminal when those capabilities are present.
+- Integrates through compiled command IDs with Omnisearch, Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, Custom Frames, and Lean Terminal when those capabilities are present. The Omnisearch adapter is fixed to the verified `omnisearch:show-modal` command and does not manage its index or HTTP settings.
+- Shows a fixed interface-capability registry on System with owners, local availability, and explicit replacement boundaries; discovered command IDs are diagnostic only and are never executed.
 - Opens native Sessions, NPC, Location, and Operational Review Queue Bases through fixed vault paths.
 - Exposes navigation through the `obsidian://vc-control?action=<allowlisted-id>` protocol.
 
 The dashboard resolves campaign state from `1-Campaign/DM/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is absent, null, malformed, or not a positive integer.
 
 The active session room is a separate, explicit plugin-local selection. Selecting it never writes Current State, chooses a lead, establishes chronology, or promotes a draft. The room name must match the selected folder basename so workflow filenames cannot escape the room.
+
+RUN generation accepts exactly one of two source-citing evidence authorities: an exact standalone `vcg:declaration <id>` marker in the active room's `<display name> Decision Intake.md`, or the exact `deployment_mode: dm-selected-from-live-handoff` plus one safe scalar `selected_lead` parsed from the same `1-Campaign/DM/Current State of Affairs.md` snapshot. Zero authorities, both authorities, markers inside fenced or indented code, a mismatched source path, incomplete DM fields, or fields that do not match that snapshot fail closed. The DM path is labelled as DM authority and never represented as player wording. The reviewed proposal displays a SHA-256/size/mtime evidence read set and re-reads and re-hashes it after target preflight but before any mutation. The older `declarationEvidence` builder input remains accepted as a player-declaration compatibility path, but cannot be combined with the typed evidence input.
 
 See [FEATURE_COVERAGE.md](FEATURE_COVERAGE.md) for the exact implementation status and ownership boundary of all fifty operating upgrades.
 
@@ -65,6 +71,7 @@ These IDs are stable hotkey and control-block targets. Obsidian prefixes command
 
 - `open-live-edge-router`
 - `open-command-search`
+- `open-omnisearch`
 - `open-entity-navigator`
 - `create-managed-note`
 - `capture-quick-inbox`
@@ -131,7 +138,9 @@ Session rooms are direct children of `1-Campaign/Sessions`. Quick capture append
 
 - Styling is presentation, not access control. Maintain player-safe material separately.
 - Note content cannot define executables, paths, URLs, or command arguments.
+- `ad-statblock` content is passed through a narrow sanitizer before Obsidian's Markdown renderer: raw HTML, embeds, fenced processors, Dataview expressions, and Meta Bind `BUTTON`/`INPUT`/`VIEW` directives are displayed rather than invoked.
 - Reviewed mutations execute from the serialized preview snapshot plus one captured target baseline per operation. Execute stays disabled until every kind/hash/size/mtime baseline is captured and shown. All targets and parent paths are preflighted before mutation, and append content is checked again inside `Vault.process`. Existing create targets, changed targets, and missing append targets without a reviewed initializer fail closed.
+- Evidence-gated proposals bind each read source to the displayed SHA-256/size/mtime snapshot. Every source must remain the same existing file through the final pre-write recheck.
 - The plugin blocks direct writes to Current State, Canon Decisions Log, Campaign State Ledger, and Current Leads.
 - The append rollback before-state is captured inside Obsidian's atomic `Vault.process`. Rollback restores only exact expected append results and trashes only created files whose current content exactly matches the reviewed write; concurrent changes are left intact and reported.
 - External application actions delegate only to compiled Obsidian command IDs or a validated loopback URL.

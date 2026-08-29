@@ -227,6 +227,7 @@ export class ProposalReviewModal extends Modal {
   private previewSnapshot = "";
   private errorEl: HTMLElement | null = null;
   private readonly baselineElements = new Map<string, HTMLElement>();
+  private readonly evidenceBaselineElements = new Map<string, HTMLElement>();
 
   constructor(
     app: App,
@@ -262,6 +263,24 @@ export class ProposalReviewModal extends Modal {
       cls: "vc-control-workflow-error",
       attr: { id: errorId, role: "alert", "aria-live": "assertive", hidden: "" }
     });
+
+    const evidenceSources = this.proposal.evidenceSources ?? [];
+    if (evidenceSources.length > 0) {
+      const evidence = this.contentEl.createEl("section", { cls: "vc-control-proposal-evidence" });
+      evidence.createEl("h3", { text: "Evidence read set" });
+      evidence.createEl("p", {
+        text: "Each source must remain the same existing file from review through execution."
+      });
+      const evidenceList = evidence.createEl("ul");
+      for (const source of evidenceSources) {
+        const item = evidenceList.createEl("li");
+        item.createEl("code", { text: source.path });
+        const baseline = item.createEl("p", {
+          text: `Expected SHA-256 ${source.contentHash.slice(0, 16)}…; capturing file baseline…`
+        });
+        this.evidenceBaselineElements.set(source.path, baseline);
+      }
+    }
 
     const list = this.contentEl.createEl("ol", { cls: "vc-control-proposal-list" });
     for (const operation of this.proposal.operations) {
@@ -302,6 +321,7 @@ export class ProposalReviewModal extends Modal {
     this.onDismiss();
     this.errorEl = null;
     this.baselineElements.clear();
+    this.evidenceBaselineElements.clear();
     this.contentEl.empty();
   }
 
@@ -327,16 +347,18 @@ export class ProposalReviewModal extends Modal {
 
   private async captureBaselines(button: HTMLButtonElement): Promise<void> {
     try {
-      const targetBaselines = await Promise.all(
-        this.proposal.operations.map(async (operation): Promise<ReviewedTargetBaseline> => {
-          const target = this.app.vault.getAbstractFileByPath(operation.path);
-          if (target instanceof TFolder) return buildTargetBaseline(operation.path, "folder", null, null, null);
-          if (!(target instanceof TFile)) return buildTargetBaseline(operation.path, "missing", null, null, null);
-          const contents = await this.app.vault.read(target);
-          return buildTargetBaseline(operation.path, "file", contents, target.stat.mtime, target.stat.size);
-        })
-      );
-      const reviewed: ReviewedMutationProposal = { ...this.proposal, targetBaselines };
+      const capture = async (path: string): Promise<ReviewedTargetBaseline> => {
+        const target = this.app.vault.getAbstractFileByPath(path);
+        if (target instanceof TFolder) return buildTargetBaseline(path, "folder", null, null, null);
+        if (!(target instanceof TFile)) return buildTargetBaseline(path, "missing", null, null, null);
+        const contents = await this.app.vault.read(target);
+        return buildTargetBaseline(path, "file", contents, target.stat.mtime, target.stat.size);
+      };
+      const [targetBaselines, evidenceBaselines] = await Promise.all([
+        Promise.all(this.proposal.operations.map((operation) => capture(operation.path))),
+        Promise.all((this.proposal.evidenceSources ?? []).map((source) => capture(source.path)))
+      ]);
+      const reviewed: ReviewedMutationProposal = { ...this.proposal, targetBaselines, evidenceBaselines };
       validateReviewedProposal(reviewed);
       if (this.closed) return;
       for (const baseline of targetBaselines) {
@@ -350,6 +372,15 @@ export class ProposalReviewModal extends Modal {
             : baseline.kind;
         element.setText(`Reviewed baseline: ${summary}.`);
       }
+      for (const baseline of evidenceBaselines) {
+        const element = this.evidenceBaselineElements.get(baseline.path);
+        if (!element) continue;
+        element.setText(
+          `Reviewed evidence: file · SHA-256 ${baseline.contentHash?.slice(0, 16)}… · ${baseline.size} bytes · mtime ${new Date(
+            baseline.mtime ?? 0
+          ).toISOString()}.`
+        );
+      }
       this.previewSnapshot = JSON.stringify(reviewed);
       button.disabled = false;
       button.setAttr("aria-busy", "false");
@@ -357,7 +388,7 @@ export class ProposalReviewModal extends Modal {
       if (this.closed) return;
       const message = error instanceof Error ? error.message : String(error);
       this.errorEl?.removeAttribute("hidden");
-      this.errorEl?.setText(`Target baseline capture failed: ${message}`);
+      this.errorEl?.setText(`Target or evidence baseline capture failed: ${message}`);
       button.disabled = true;
       button.setAttr("aria-busy", "false");
     }

@@ -5,7 +5,8 @@ import esbuild from "esbuild";
 const testEntries = [
   "tests/operating.test.ts",
   "tests/navigation.test.ts",
-  "tests/entity-navigator.test.ts"
+  "tests/entity-navigator.test.ts",
+  "tests/ui-contract.test.ts"
 ];
 
 for (const entryPoint of testEntries) {

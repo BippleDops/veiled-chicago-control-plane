@@ -222,7 +222,7 @@ const BASE_CONTROL_ACTIONS = [
   {
     id: "generate-session-run",
     title: "Generate Draft RUN",
-    description: "Create conditional prep only after declaration evidence exists.",
+    description: "Create conditional prep only after exactly one supported selection authority validates.",
     group: "Creation and session",
     icon: "file-lock-2",
     kind: "workflow"
@@ -295,7 +295,7 @@ const BASE_CONTROL_ACTIONS = [
   },
   {
     id: "open-operations-health",
-    title: "Operations Health",
+    title: "Runtime & Tool Health",
     description: "Open runtime capabilities, workflow gates, and recent transaction status.",
     group: "AI and governance",
     icon: "heart-pulse",
@@ -406,6 +406,16 @@ const BASE_CONTROL_ACTIONS = [
     protocolSafe: true
   },
   {
+    id: "open-omnisearch",
+    title: "Omnisearch",
+    description: "Search indexed note bodies with the installed local-only Omnisearch view.",
+    group: "Applications",
+    icon: "scan-search",
+    kind: "command",
+    target: "omnisearch:show-modal",
+    protocolSafe: true
+  },
+  {
     id: "open-bookmarks",
     title: "Bookmarks",
     description: "Open Obsidian's native bookmarks view.",
@@ -477,8 +487,8 @@ const BASE_CONTROL_ACTIONS = [
   },
   {
     id: "open-vault-health",
-    title: "Vault Health",
-    description: "Open the human-readable vault health dashboard.",
+    title: "Vault Content Health",
+    description: "Open the human-readable vault content and metadata health dashboard.",
     group: "Automation",
     icon: "heart-pulse",
     kind: "note",
@@ -606,7 +616,11 @@ const ACTION_NAVIGATION = {
   "scaffold-active-session-room": { route: "session", verb: "CREATE", keywords: ["draft", "operating notes"] },
   "open-session-preflight": { route: "session", verb: "REVIEW", keywords: ["safety", "access", "readiness"] },
   "capture-player-declaration": { route: "session", verb: "CAPTURE", keywords: ["verbatim", "choice", "evidence"] },
-  "generate-session-run": { route: "session", verb: "CREATE", keywords: ["conditional prep", "declaration"] },
+  "generate-session-run": {
+    route: "session",
+    verb: "CREATE",
+    keywords: ["conditional prep", "selection evidence", "declaration", "dm handoff"]
+  },
   "open-session-readiness": { route: "session", verb: "REVIEW", keywords: ["fail closed", "board"] },
   "capture-live-event": { route: "session", verb: "CAPTURE", keywords: ["table log", "confirmed", "contested"] },
   "open-promotion-review": { route: "session", verb: "REVIEW", keywords: ["canon", "evidence", "gate"] },
@@ -625,6 +639,7 @@ const ACTION_NAVIGATION = {
   "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
   "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
   "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
+  "open-omnisearch": { route: "tools", verb: "OPEN", keywords: ["full text", "body search", "local index"] },
   "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
   "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
   "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },

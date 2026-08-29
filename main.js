@@ -574,7 +574,7 @@ var BASE_CONTROL_ACTIONS = [
   {
     id: "generate-session-run",
     title: "Generate Draft RUN",
-    description: "Create conditional prep only after declaration evidence exists.",
+    description: "Create conditional prep only after exactly one supported selection authority validates.",
     group: "Creation and session",
     icon: "file-lock-2",
     kind: "workflow"
@@ -647,7 +647,7 @@ var BASE_CONTROL_ACTIONS = [
   },
   {
     id: "open-operations-health",
-    title: "Operations Health",
+    title: "Runtime & Tool Health",
     description: "Open runtime capabilities, workflow gates, and recent transaction status.",
     group: "AI and governance",
     icon: "heart-pulse",
@@ -758,6 +758,16 @@ var BASE_CONTROL_ACTIONS = [
     protocolSafe: true
   },
   {
+    id: "open-omnisearch",
+    title: "Omnisearch",
+    description: "Search indexed note bodies with the installed local-only Omnisearch view.",
+    group: "Applications",
+    icon: "scan-search",
+    kind: "command",
+    target: "omnisearch:show-modal",
+    protocolSafe: true
+  },
+  {
     id: "open-bookmarks",
     title: "Bookmarks",
     description: "Open Obsidian's native bookmarks view.",
@@ -829,8 +839,8 @@ var BASE_CONTROL_ACTIONS = [
   },
   {
     id: "open-vault-health",
-    title: "Vault Health",
-    description: "Open the human-readable vault health dashboard.",
+    title: "Vault Content Health",
+    description: "Open the human-readable vault content and metadata health dashboard.",
     group: "Automation",
     icon: "heart-pulse",
     kind: "note",
@@ -950,7 +960,11 @@ var ACTION_NAVIGATION = {
   "scaffold-active-session-room": { route: "session", verb: "CREATE", keywords: ["draft", "operating notes"] },
   "open-session-preflight": { route: "session", verb: "REVIEW", keywords: ["safety", "access", "readiness"] },
   "capture-player-declaration": { route: "session", verb: "CAPTURE", keywords: ["verbatim", "choice", "evidence"] },
-  "generate-session-run": { route: "session", verb: "CREATE", keywords: ["conditional prep", "declaration"] },
+  "generate-session-run": {
+    route: "session",
+    verb: "CREATE",
+    keywords: ["conditional prep", "selection evidence", "declaration", "dm handoff"]
+  },
   "open-session-readiness": { route: "session", verb: "REVIEW", keywords: ["fail closed", "board"] },
   "capture-live-event": { route: "session", verb: "CAPTURE", keywords: ["table log", "confirmed", "contested"] },
   "open-promotion-review": { route: "session", verb: "REVIEW", keywords: ["canon", "evidence", "gate"] },
@@ -969,6 +983,7 @@ var ACTION_NAVIGATION = {
   "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
   "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
   "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
+  "open-omnisearch": { route: "tools", verb: "OPEN", keywords: ["full text", "body search", "local index"] },
   "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
   "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
   "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },
@@ -1121,6 +1136,93 @@ var ControlActionSearchModal = class extends import_obsidian.FuzzySuggestModal {
     }
   }
 };
+
+// src/capabilities.ts
+var INTERFACE_CAPABILITIES = [
+  {
+    id: "workflow-authority",
+    capability: "Campaign workflow and reviewed creation",
+    owner: "Veiled Chicago Control Plane",
+    boundary: "Sole mutation authority; note content cannot add actions.",
+    builtIn: true
+  },
+  {
+    id: "context-toolbar",
+    capability: "Contextual note controls",
+    owner: "Note Toolbar",
+    boundary: "Fixed command and file launchers only; no script items.",
+    pluginIds: ["note-toolbar"]
+  },
+  {
+    id: "body-search",
+    capability: "Local full-text retrieval",
+    owner: "Omnisearch",
+    boundary: "Read-only local index; optional HTTP server is outside this plugin.",
+    pluginIds: ["omnisearch"],
+    commandIds: ["omnisearch:show-modal"]
+  },
+  {
+    id: "filename-navigation",
+    capability: "Filename navigation and saved routes",
+    owner: "Obsidian Quick Switcher, Bookmarks, and Workspaces",
+    boundary: "Native navigation only; no workflow writes.",
+    commandIds: ["switcher:open", "bookmarks:open", "workspaces:open-modal"]
+  },
+  {
+    id: "structured-indexes",
+    capability: "Structured indexes",
+    owner: "Obsidian Bases and Dataview",
+    boundary: "Bases-first for new indexes; no bulk query migration.",
+    pluginIds: ["dataview"]
+  },
+  {
+    id: "world-maps",
+    capability: "World maps and local map application",
+    owner: "Leaflet and Custom Frames",
+    boundary: "Existing map corpus and fixed frame commands; no inferred geography.",
+    pluginIds: ["obsidian-leaflet-plugin", "obsidian-custom-frames"]
+  },
+  {
+    id: "tabletop-runtime",
+    capability: "Tabletop runtime",
+    owner: "Dice Roller, Fantasy Statblocks, Initiative Tracker, and D&D UI Toolkit",
+    boundary: "Retained until contract-equivalent first-party migrations exist.",
+    pluginIds: ["obsidian-dice-roller", "obsidian-5e-statblocks", "initiative-tracker", "dnd-ui-toolkit"]
+  },
+  {
+    id: "managed-interactions",
+    capability: "Managed note interactions",
+    owner: "Meta Bind and Templater",
+    boundary: "Retained for existing reviewed bindings; not a second creation authority.",
+    pluginIds: ["obsidian-meta-bind-plugin", "templater-obsidian"]
+  },
+  {
+    id: "local-operations",
+    capability: "Local operations bridge",
+    owner: "Lean Terminal and Local REST API",
+    boundary: "Local, explicit adapters; credentials and listeners remain externally managed.",
+    pluginIds: ["lean-terminal", "obsidian-local-rest-api"]
+  },
+  {
+    id: "presentation-policy",
+    capability: "Presentation and view-mode policy",
+    owner: "Style Settings and Force View Mode",
+    boundary: "Presentation only; never an audience or access-control boundary.",
+    pluginIds: ["obsidian-style-settings", "obsidian-view-mode-by-frontmatter"]
+  }
+];
+function capabilityRuntimeStatus(definition, probe) {
+  const checks = [
+    ...definition.builtIn ? [{ id: "built-in", available: true }] : [],
+    ...(definition.pluginIds ?? []).map((id) => ({ id, available: probe.pluginEnabled(id) })),
+    ...(definition.commandIds ?? []).map((id) => ({ id, available: probe.commandAvailable(id) }))
+  ];
+  const available = checks.filter((check) => check.available).length;
+  const missing = checks.filter((check) => !check.available).map((check) => check.id);
+  const required = checks.length;
+  const state = available === required ? "available" : available === 0 ? "unavailable" : "partial";
+  return { state, available, required, missing };
+}
 
 // src/entity-navigator.ts
 var ENTITY_RESULT_LIMIT = 100;
@@ -1517,6 +1619,7 @@ var MANAGED_NOTE_SCHEMAS = [
     bodyHeading: "Correction proposal"
   }
 ];
+var DM_LIVE_HANDOFF_DEPLOYMENT_MODE = "dm-selected-from-live-handoff";
 var PROTECTED_CANON_PATH_SET = new Set(PROTECTED_CANON_PATHS.map((path) => path.toLocaleLowerCase("en-US")));
 var MANAGED_WRITE_ROOTS = ["1-Campaign", "2-World", "3-Library", "9-System"];
 var MANAGED_WRITE_EXTENSIONS = /* @__PURE__ */ new Set(["md"]);
@@ -1527,6 +1630,117 @@ function inlineText(value, label) {
   const normalized = value.replace(/\r?\n/g, " ").trim();
   if (/\p{Cc}/u.test(normalized)) throw new Error(`${label} contains unsupported control characters.`);
   return normalized;
+}
+function visualColumns(value) {
+  let columns = 0;
+  for (const character of value) columns = character === "	" ? columns + (4 - columns % 4) : columns + 1;
+  return columns;
+}
+function consumeExactIndent(value, requiredColumns) {
+  let columns = 0;
+  let index = 0;
+  while (index < value.length && columns < requiredColumns) {
+    const character = value[index];
+    if (character !== " " && character !== "	") return null;
+    columns = character === "	" ? columns + (4 - columns % 4) : columns + 1;
+    index += 1;
+  }
+  return columns === requiredColumns ? value.slice(index) : null;
+}
+function fenceOpening(line) {
+  let remainder = line;
+  const containers = [];
+  while (true) {
+    const quote = remainder.match(/^ {0,3}>[ \t]?/);
+    if (quote?.[0]) {
+      containers.push({ kind: "quote" });
+      remainder = remainder.slice(quote[0].length);
+      continue;
+    }
+    const list = remainder.match(/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/);
+    if (list?.[0]) {
+      containers.push({ kind: "indent", columns: visualColumns(list[0]) });
+      remainder = remainder.slice(list[0].length);
+      continue;
+    }
+    break;
+  }
+  const opening = remainder.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  const run = opening?.[1];
+  const info = opening?.[2] ?? "";
+  if (!run || run[0] === "`" && info.includes("`")) return null;
+  return { character: run[0], length: run.length, containers };
+}
+function fenceClosingLine(line, fence) {
+  let remainder = line;
+  for (const container of fence.containers) {
+    if (container.kind === "quote") {
+      const quote = remainder.match(/^ {0,3}>[ \t]?/);
+      if (!quote?.[0]) return null;
+      remainder = remainder.slice(quote[0].length);
+      continue;
+    }
+    const consumed = consumeExactIndent(remainder, container.columns);
+    if (consumed === null) return null;
+    remainder = consumed;
+  }
+  return remainder;
+}
+function declarationMarkerIds(contents) {
+  const ids = [];
+  let fence = null;
+  for (const line of contents.split(/\r?\n/)) {
+    if (fence) {
+      const candidate = fenceClosingLine(line, fence);
+      const closing = candidate?.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      const run = closing?.[1];
+      if (run && run[0] === fence.character && run.length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = fenceOpening(line);
+    if (opening) {
+      fence = opening;
+      continue;
+    }
+    const marker = line.match(
+      /^<!--\s*vcg:declaration\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*-->[ \t]*$/
+    );
+    if (marker?.[1]) ids.push(marker[1]);
+  }
+  return ids;
+}
+function selectedLeadIdentifier(value) {
+  if (typeof value !== "string") {
+    throw new Error("DM live-handoff selection requires selected_lead to be one scalar identifier.");
+  }
+  const selectedLead = value.trim();
+  if (!/^[a-z0-9][a-z0-9._:-]{0,159}$/i.test(selectedLead)) {
+    throw new Error("DM live-handoff selection requires selected_lead to be one safe scalar identifier.");
+  }
+  return selectedLead;
+}
+function strictFrontmatterScalar(contents, key) {
+  const lines = contents.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return null;
+  const closingIndex = lines.slice(1).findIndex((line) => line.trim() === "---");
+  if (closingIndex < 0) return null;
+  const values = lines.slice(1, closingIndex + 1).flatMap((line) => {
+    const separator = line.indexOf(":");
+    if (separator < 0 || line.slice(0, separator).trim() !== key || /^\s/.test(line)) return [];
+    const raw = line.slice(separator + 1).trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(raw)) return [raw];
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      try {
+        const parsed = JSON.parse(raw);
+        return typeof parsed === "string" ? [parsed] : [];
+      } catch {
+        return [];
+      }
+    }
+    if (raw.startsWith("'") && raw.endsWith("'")) return [raw.slice(1, -1).replaceAll("''", "'")];
+    return [];
+  });
+  return values.length === 1 ? values[0] ?? null : null;
 }
 function normalizeNoteTitle(value) {
   const title = inlineText(value, "Title");
@@ -1678,6 +1892,26 @@ function validateReviewedProposal(proposal) {
     }
     resolveOperationMode(operation, baseline.kind);
   });
+  if (proposal.evidenceBaselines !== void 0 && !Array.isArray(proposal.evidenceBaselines)) {
+    throw new Error("Reviewed evidence baselines must be an array.");
+  }
+  const evidenceSources = proposal.evidenceSources ?? [];
+  const evidenceBaselines = proposal.evidenceBaselines ?? [];
+  if (evidenceBaselines.length !== evidenceSources.length) {
+    throw new Error("Every proposal evidence source requires exactly one reviewed file baseline.");
+  }
+  evidenceSources.forEach((source, index) => {
+    const baseline = evidenceBaselines[index];
+    if (!baseline || baseline.path !== source.path) {
+      throw new Error(`Reviewed evidence baseline does not match source ${index + 1}.`);
+    }
+    if (baseline.kind !== "file" || typeof baseline.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(baseline.contentHash) || !Number.isFinite(baseline.mtime) || Number(baseline.mtime) < 0 || !Number.isFinite(baseline.size) || Number(baseline.size) < 0) {
+      throw new Error(`Reviewed evidence source must be an existing valid file: ${source.path}`);
+    }
+    if (baseline.contentHash !== source.contentHash) {
+      throw new Error(`Evidence source changed before review baseline capture: ${source.path}`);
+    }
+  });
 }
 function validateProposal(proposal) {
   if (!proposal || typeof proposal !== "object" || !Array.isArray(proposal.operations)) {
@@ -1717,6 +1951,25 @@ function validateProposal(proposal) {
     }
     if (operationPaths.has(path)) throw new Error(`Duplicate operation target: ${path}`);
     operationPaths.add(path);
+  }
+  if (proposal.evidenceSources !== void 0 && !Array.isArray(proposal.evidenceSources)) {
+    throw new Error("Proposal evidence sources must be an array.");
+  }
+  const evidenceSources = proposal.evidenceSources ?? [];
+  if (evidenceSources.length > 8) throw new Error("A proposal can bind at most 8 evidence sources.");
+  const evidencePaths = /* @__PURE__ */ new Set();
+  for (const source of evidenceSources) {
+    if (!source || typeof source !== "object" || typeof source.path !== "string") {
+      throw new Error("Proposal contains an invalid evidence source.");
+    }
+    const path = validateManagedWritePath(source.path);
+    if (path !== source.path) throw new Error(`Evidence source path must already be normalized: ${source.path}`);
+    if (typeof source.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(source.contentHash)) {
+      throw new Error(`Evidence source requires a SHA-256 content hash: ${path}`);
+    }
+    if (operationPaths.has(path)) throw new Error(`Evidence source cannot also be a mutation target: ${path}`);
+    if (evidencePaths.has(path)) throw new Error(`Duplicate evidence source: ${path}`);
+    evidencePaths.add(path);
   }
 }
 function resolveOperationMode(operation, target) {
@@ -1806,9 +2059,9 @@ function buildSessionRoomProposal(input) {
 
 ## Operating sequence
 
-1. Record the player declaration verbatim.
+1. Establish exactly one supported selection authority: a verbatim player declaration or an explicit DM selection from the live handoff.
 2. Complete preflight and readiness checks.
-3. Generate a draft RUN only after declaration evidence exists.
+3. Generate a draft RUN only after the selection evidence validates.
 4. Capture live events as confirmed, contested, or unknown.
 5. Review candidates before any canonical owner changes.
 `
@@ -1827,8 +2080,9 @@ compact: false
 
 ## Current focus
 
-- **Player declaration:** not recorded
-- **RUN:** blocked until declaration evidence exists
+- **Selection evidence:** not validated
+- **Supported authorities:** verbatim player declaration or DM-selected live handoff
+- **RUN:** blocked until exactly one supported authority validates
 - **Canon promotion:** human review only
 `
     },
@@ -1837,7 +2091,7 @@ compact: false
       path: file("Decision Intake"),
       contents: sessionFrontmatter(`${displayName} Decision Intake`, input.createdDate, ["Category/Decision-Intake"]) + `# ${displayName} Decision Intake
 
-> Player wording is append-only evidence. Corrections add a new entry; they do not replace the original.
+> Player wording is append-only evidence. Corrections add a new entry; they do not replace the original. A DM-selected live-handoff authority remains in Current State and is never copied here as player intent.
 
 ## Declarations
 
@@ -1873,9 +2127,10 @@ _No declaration recorded._
       path: file("Readiness Board"),
       contents: sessionFrontmatter(`${displayName} Readiness Board`, input.createdDate, ["Category/Session-Readiness"]) + `# ${displayName} Readiness Board
 
-- [ ] Verbatim declaration evidence exists
+- [ ] Exactly one supported selection-evidence authority exists
+- [ ] Player path has a verbatim declaration marker, or DM path has the exact Current State deployment mode and selected lead
 - [ ] Preflight is complete
-- [ ] Draft RUN cites the declaration and current-state sources
+- [ ] Draft RUN cites its selection authority and current-state sources
 - [ ] Map / fallback contract is ready
 - [ ] Player-facing surfaces pass the audience gate
 - [ ] Recording consent and retention are documented
@@ -2025,26 +2280,143 @@ function buildTranscriptionRequestProposal(input) {
   validateProposal(proposal);
   return proposal;
 }
+function collectRunSelectionEvidence(input) {
+  const roomPath = normalizeSessionRoomPath(input.roomPath);
+  const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
+  const candidates = [];
+  if (input.decisionIntakeContents && declarationMarkerIds(input.decisionIntakeContents).length > 0) {
+    candidates.push({
+      authority: "player-declaration",
+      sourcePath: `${roomPath}/${displayName} Decision Intake.md`,
+      contents: input.decisionIntakeContents
+    });
+  }
+  const deploymentMode = input.currentStateContents ? strictFrontmatterScalar(input.currentStateContents, "deployment_mode") : null;
+  const selectedLead = input.currentStateContents ? strictFrontmatterScalar(input.currentStateContents, "selected_lead") : null;
+  if (input.currentStateContents !== null && deploymentMode === DM_LIVE_HANDOFF_DEPLOYMENT_MODE) {
+    candidates.push({
+      authority: "dm-selected-from-live-handoff",
+      sourcePath: VAULT_PATHS.currentState,
+      contents: input.currentStateContents,
+      deploymentMode,
+      selectedLead
+    });
+  }
+  return candidates;
+}
+function resolveRunSelectionEvidence(input) {
+  const roomPath = normalizeSessionRoomPath(input.roomPath);
+  const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
+  const legacyEvidenceSupplied = input.declarationEvidence !== void 0;
+  if (input.selectionEvidence !== void 0 && legacyEvidenceSupplied) {
+    throw new Error("RUN generation is blocked because multiple selection-evidence inputs were supplied.");
+  }
+  const candidates = input.selectionEvidence ?? (legacyEvidenceSupplied ? [
+    {
+      authority: "player-declaration",
+      sourcePath: `${roomPath}/${displayName} Decision Intake.md`,
+      contents: input.declarationEvidence ?? ""
+    }
+  ] : []);
+  if (candidates.length === 0) {
+    throw new Error("RUN generation is blocked until exactly one explicit selection-evidence authority exists.");
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      "RUN generation is blocked because multiple selection-evidence authorities are present; resolve the authority first."
+    );
+  }
+  const candidate = candidates[0];
+  if (!candidate) throw new Error("RUN generation is blocked because selection evidence could not be resolved.");
+  if (candidate.authority !== "player-declaration" && candidate.authority !== "dm-selected-from-live-handoff") {
+    throw new Error("RUN generation is blocked because selection evidence has an unknown authority.");
+  }
+  const sourcePath = normalizeVaultPath(candidate.sourcePath);
+  if (sourcePath !== candidate.sourcePath) {
+    throw new Error("Selection-evidence source paths must already be normalized vault-relative paths.");
+  }
+  if (candidate.authority === "player-declaration") {
+    const expectedPath = `${roomPath}/${displayName} Decision Intake.md`;
+    if (sourcePath !== expectedPath) {
+      throw new Error(`Player-declaration evidence must come from the active room Decision Intake: ${expectedPath}`);
+    }
+    const declarationIds = declarationMarkerIds(candidate.contents);
+    const declarationId = declarationIds.at(-1);
+    if (!declarationId) {
+      if (legacyEvidenceSupplied) {
+        throw new Error("RUN generation is blocked until declaration evidence exists in Decision Intake.");
+      }
+      throw new Error("Player-declaration selection evidence requires an exact standalone vcg:declaration marker.");
+    }
+    return {
+      authority: candidate.authority,
+      sourcePath,
+      sourceContentHash: contentHash(candidate.contents),
+      declarationId
+    };
+  }
+  if (sourcePath !== VAULT_PATHS.currentState) {
+    throw new Error(`DM live-handoff selection evidence must come from ${VAULT_PATHS.currentState}.`);
+  }
+  if (typeof candidate.deploymentMode !== "string" || candidate.deploymentMode.trim() !== DM_LIVE_HANDOFF_DEPLOYMENT_MODE) {
+    throw new Error(
+      `DM live-handoff selection requires deployment_mode: ${DM_LIVE_HANDOFF_DEPLOYMENT_MODE}.`
+    );
+  }
+  if (!candidate.contents.trim()) {
+    throw new Error("DM live-handoff selection requires the Current State source contents.");
+  }
+  const selectedLead = selectedLeadIdentifier(candidate.selectedLead);
+  const sourceDeploymentMode = strictFrontmatterScalar(candidate.contents, "deployment_mode");
+  const sourceSelectedLead = strictFrontmatterScalar(candidate.contents, "selected_lead");
+  if (sourceDeploymentMode !== candidate.deploymentMode || sourceSelectedLead !== selectedLead) {
+    throw new Error("DM live-handoff selection fields must match the same Current State source snapshot.");
+  }
+  return {
+    authority: candidate.authority,
+    sourcePath,
+    sourceContentHash: contentHash(candidate.contents),
+    selectedLead
+  };
+}
+function runSelectionEvidenceMarkdown(evidence) {
+  if (evidence.authority === "player-declaration") {
+    return `- **Selection authority:** verbatim player declaration
+- **Evidence source:** [[${evidence.sourcePath}]]
+- **Evidence snapshot:** SHA-256 \`${evidence.sourceContentHash}\`
+- **Evidence marker:** \`vcg:declaration ${evidence.declarationId}\`
+- **Player wording:** copy the reviewed verbatim statement here
+- **Selected lead:** do not infer; derive only from the reviewed declaration
+`;
+  }
+  return `- **Selection authority:** DM selection from live handoff
+- **Evidence source:** [[${evidence.sourcePath}]]
+- **Evidence snapshot:** SHA-256 \`${evidence.sourceContentHash}\`
+- **Deployment mode:** \`${DM_LIVE_HANDOFF_DEPLOYMENT_MODE}\`
+- **Selected lead:** \`${evidence.selectedLead}\`
+- **Player wording:** not asserted; this authority does not claim or fabricate player intent
+`;
+}
 function buildRunProposal(input) {
   const roomPath = normalizeSessionRoomPath(input.roomPath);
   const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
-  const evidence = input.declarationEvidence.trim();
-  if (!evidence.includes("vcg:declaration")) {
-    throw new Error("RUN generation is blocked until declaration evidence exists in Decision Intake.");
-  }
+  const selectionEvidence = resolveRunSelectionEvidence({
+    roomPath,
+    displayName,
+    selectionEvidence: input.selectionEvidence,
+    declarationEvidence: input.declarationEvidence
+  });
   const title = `${displayName} RUN`;
   const path = `${roomPath}/${title}.md`;
   const contents = sessionFrontmatter(title, input.createdDate, ["Category/Session-Prep"]) + `# ${title}
 
 > [!important] Conditional prep only
-> Generated only after an explicit declaration was recorded. This remains draft/future and cannot prove that anything happened.
+> Generated only after exactly one explicit selection-evidence authority validated. This remains draft/future, cannot prove that anything happened, and cannot convert a DM selection into player intent.
 
-## Declaration and evidence
+## Selection authority and evidence
 
 - **Latest played record:** ${inlineText(input.latestPlayedLabel, "Latest played label")}
-- **Decision intake:** [[${roomPath}/${displayName} Decision Intake]]
-- **Player wording:** copy the reviewed verbatim statement here
-- **Current-state facts used:** <!-- add citations -->
+${runSelectionEvidenceMarkdown(selectionEvidence)}- **Current-state facts used:** <!-- add citations -->
 - **Exact gaps and safe fallbacks:** <!-- document gaps -->
 - **Source modules opened for parts:** <!-- list source modules -->
 - **Source claims explicitly excluded:** <!-- list exclusions -->
@@ -2085,10 +2457,11 @@ function buildRunProposal(input) {
   const proposal = {
     id: input.proposalId,
     title: `Generate draft ${title}`,
-    summary: `Create one declaration-gated draft RUN at ${path}.`,
+    summary: `Create one explicit-selection-gated draft RUN at ${path}.`,
     phase: "propose",
     canonImpact: "candidate-only",
-    operations: [{ kind: "create", path, contents }]
+    operations: [{ kind: "create", path, contents }],
+    evidenceSources: [{ path: selectionEvidence.sourcePath, contentHash: selectionEvidence.sourceContentHash }]
   };
   validateProposal(proposal);
   return proposal;
@@ -2273,6 +2646,7 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
   previewSnapshot = "";
   errorEl = null;
   baselineElements = /* @__PURE__ */ new Map();
+  evidenceBaselineElements = /* @__PURE__ */ new Map();
   onOpen() {
     this.closed = false;
     validateProposal(this.proposal);
@@ -2295,6 +2669,23 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
       cls: "vc-control-workflow-error",
       attr: { id: errorId, role: "alert", "aria-live": "assertive", hidden: "" }
     });
+    const evidenceSources = this.proposal.evidenceSources ?? [];
+    if (evidenceSources.length > 0) {
+      const evidence = this.contentEl.createEl("section", { cls: "vc-control-proposal-evidence" });
+      evidence.createEl("h3", { text: "Evidence read set" });
+      evidence.createEl("p", {
+        text: "Each source must remain the same existing file from review through execution."
+      });
+      const evidenceList = evidence.createEl("ul");
+      for (const source of evidenceSources) {
+        const item = evidenceList.createEl("li");
+        item.createEl("code", { text: source.path });
+        const baseline = item.createEl("p", {
+          text: `Expected SHA-256 ${source.contentHash.slice(0, 16)}\u2026; capturing file baseline\u2026`
+        });
+        this.evidenceBaselineElements.set(source.path, baseline);
+      }
+    }
     const list = this.contentEl.createEl("ol", { cls: "vc-control-proposal-list" });
     for (const operation of this.proposal.operations) {
       const item = list.createEl("li");
@@ -2332,6 +2723,7 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
     this.onDismiss();
     this.errorEl = null;
     this.baselineElements.clear();
+    this.evidenceBaselineElements.clear();
     this.contentEl.empty();
   }
   async execute(button) {
@@ -2355,16 +2747,18 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
   }
   async captureBaselines(button) {
     try {
-      const targetBaselines = await Promise.all(
-        this.proposal.operations.map(async (operation) => {
-          const target = this.app.vault.getAbstractFileByPath(operation.path);
-          if (target instanceof import_obsidian2.TFolder) return buildTargetBaseline(operation.path, "folder", null, null, null);
-          if (!(target instanceof import_obsidian2.TFile)) return buildTargetBaseline(operation.path, "missing", null, null, null);
-          const contents = await this.app.vault.read(target);
-          return buildTargetBaseline(operation.path, "file", contents, target.stat.mtime, target.stat.size);
-        })
-      );
-      const reviewed = { ...this.proposal, targetBaselines };
+      const capture = async (path) => {
+        const target = this.app.vault.getAbstractFileByPath(path);
+        if (target instanceof import_obsidian2.TFolder) return buildTargetBaseline(path, "folder", null, null, null);
+        if (!(target instanceof import_obsidian2.TFile)) return buildTargetBaseline(path, "missing", null, null, null);
+        const contents = await this.app.vault.read(target);
+        return buildTargetBaseline(path, "file", contents, target.stat.mtime, target.stat.size);
+      };
+      const [targetBaselines, evidenceBaselines] = await Promise.all([
+        Promise.all(this.proposal.operations.map((operation) => capture(operation.path))),
+        Promise.all((this.proposal.evidenceSources ?? []).map((source) => capture(source.path)))
+      ]);
+      const reviewed = { ...this.proposal, targetBaselines, evidenceBaselines };
       validateReviewedProposal(reviewed);
       if (this.closed) return;
       for (const baseline of targetBaselines) {
@@ -2375,6 +2769,15 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
         ).toISOString()}` : baseline.kind;
         element.setText(`Reviewed baseline: ${summary}.`);
       }
+      for (const baseline of evidenceBaselines) {
+        const element = this.evidenceBaselineElements.get(baseline.path);
+        if (!element) continue;
+        element.setText(
+          `Reviewed evidence: file \xB7 SHA-256 ${baseline.contentHash?.slice(0, 16)}\u2026 \xB7 ${baseline.size} bytes \xB7 mtime ${new Date(
+            baseline.mtime ?? 0
+          ).toISOString()}.`
+        );
+      }
       this.previewSnapshot = JSON.stringify(reviewed);
       button.disabled = false;
       button.setAttr("aria-busy", "false");
@@ -2382,12 +2785,74 @@ var ProposalReviewModal = class extends import_obsidian2.Modal {
       if (this.closed) return;
       const message = error instanceof Error ? error.message : String(error);
       this.errorEl?.removeAttribute("hidden");
-      this.errorEl?.setText(`Target baseline capture failed: ${message}`);
+      this.errorEl?.setText(`Target or evidence baseline capture failed: ${message}`);
       button.disabled = true;
       button.setAttr("aria-busy", "false");
     }
   }
 };
+
+// src/ui-contract.ts
+var STARTUP_SURFACES = ["control-plane", "none"];
+function normalizeStartupSurface(value) {
+  return typeof value === "string" && STARTUP_SURFACES.includes(value) ? value : "control-plane";
+}
+function shouldGroupRouteActions(actionCount) {
+  return Number.isInteger(actionCount) && actionCount > 8;
+}
+function groupRouteActions(actions) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const action of actions) {
+    const bucket = buckets.get(action.group);
+    if (bucket) bucket.push(action);
+    else buckets.set(action.group, [action]);
+  }
+  return [...buckets].map(([group, groupedActions]) => ({ group, actions: groupedActions }));
+}
+function escapeSurface(contextOpen, moreOpen) {
+  if (contextOpen) return "context";
+  if (moreOpen) return "more";
+  return null;
+}
+function stableDomIdToken(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+var AD_STATBLOCK_TITLE = /^\s*title\s*:\s*(.*?)\s*$/i;
+function parseAdStatblock(source) {
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const firstLine = lines[0] ?? "";
+  const titleMatch = firstLine.match(AD_STATBLOCK_TITLE);
+  const title = (titleMatch?.[1] ?? "").trim().slice(0, 160) || "Statblock";
+  return {
+    title,
+    markdown: (titleMatch ? lines.slice(1) : lines).join("\n").trim()
+  };
+}
+function sanitizeAdStatblockMarkdown(markdown) {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  let fence = null;
+  const safeLines = lines.map((rawLine) => {
+    const line = rawLine.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/!\[\[/g, "[[");
+    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      const isClose = marker?.[1]?.[0] === fence.character && marker[1].length >= fence.length;
+      if (isClose) fence = null;
+      return `    ${line}`;
+    }
+    if (marker?.[1]) {
+      fence = { character: marker[1][0], length: marker[1].length };
+      return `    ${line}`;
+    }
+    return line.replace(/`([=$])([^`\n]*)`/g, "`\\$1$2`").replace(/\b(BUTTON|INPUT|VIEW)\[/gi, "$1\u2060[");
+  });
+  return safeLines.join("\n");
+}
+var ENTITY_SEARCH_DEBOUNCE_MS = 180;
 
 // src/main.ts
 var VIEW_TYPE = "veiled-chicago-control-plane";
@@ -2406,6 +2871,7 @@ var DEFAULT_SETTINGS = {
   activeSessionName: null,
   activeContextProfile: "session-live",
   activeRoute: "home",
+  startupSurface: "control-plane",
   favoriteActionIds: [],
   recentActions: [],
   recentRuns: [],
@@ -2446,6 +2912,12 @@ function attributeToken(value) {
   if (typeof value !== "string") return null;
   const token = value.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
   return token || null;
+}
+function setFieldValidation(input, error, valid, message) {
+  input.setAttr("aria-invalid", String(!valid));
+  input.toggleClass("is-invalid", !valid);
+  error.hidden = valid;
+  error.setText(valid ? "" : message);
 }
 function isRunRecord(value) {
   const record = asRecord(value);
@@ -2533,12 +3005,14 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
   routeHistory;
   liveRegion = null;
   contextTrigger = null;
+  moreTrigger = null;
   contextOpen = false;
   moreOpen = false;
   entityQuery = "";
   entityType = "";
   entityStatus = "";
   renderGeneration = 0;
+  entitySearchTimer = null;
   contextResizeObserver = null;
   handleKeydown = (event) => {
     if (event.key === "Tab" && this.contextOpen && this.trapContextFocus(event)) return;
@@ -2563,9 +3037,15 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
       void this.navigate(route, false);
       return;
     }
-    if (event.key === "Escape" && this.contextOpen) {
-      event.preventDefault();
-      this.closeContext(true);
+    if (event.key === "Escape") {
+      const surface = escapeSurface(this.contextOpen, this.moreOpen);
+      if (surface === "context") {
+        event.preventDefault();
+        this.closeContext(true);
+      } else if (surface === "more") {
+        event.preventDefault();
+        this.setMoreOpen(false, true);
+      }
     }
   };
   getViewType() {
@@ -2585,10 +3065,14 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
   }
   async onClose() {
     this.contentEl.removeEventListener("keydown", this.handleKeydown);
+    if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+    this.entitySearchTimer = null;
     this.contextResizeObserver?.disconnect();
     this.contextResizeObserver = null;
   }
   async render(announcement) {
+    if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+    this.entitySearchTimer = null;
     const generation = ++this.renderGeneration;
     const { contentEl } = this;
     const activeElement = document.activeElement;
@@ -2596,6 +3080,7 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     const scrollTop = contentEl.scrollTop;
     const persistentLiveRegion = this.liveRegion ?? document.createElement("div");
     persistentLiveRegion.className = "vc-control-live-region";
+    persistentLiveRegion.setAttribute("role", "status");
     persistentLiveRegion.setAttribute("aria-live", "polite");
     persistentLiveRegion.setAttribute("aria-atomic", "true");
     persistentLiveRegion.remove();
@@ -2720,6 +3205,7 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     }
     const moreItem = list.createEl("li");
     const more = moreItem.createEl("button");
+    this.moreTrigger = more;
     more.type = "button";
     more.dataset.vcFocus = "mobile-more";
     more.setAttr("aria-expanded", String(this.moreOpen));
@@ -2729,16 +3215,16 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     moreIcon.setAttr("aria-hidden", "true");
     (0, import_obsidian3.setIcon)(moreIcon, "ellipsis");
     more.createSpan({ text: "More" });
-    more.addEventListener("click", () => {
-      this.moreOpen = !this.moreOpen;
-      const panel2 = this.contentEl.querySelector(`#vc-control-more-${this.instanceId}`);
-      panel2?.toggleClass("is-open", this.moreOpen);
-      panel2?.setAttr("data-open", String(this.moreOpen));
-      more.setAttr("aria-expanded", String(this.moreOpen));
-    });
+    more.addEventListener("click", () => this.setMoreOpen(!this.moreOpen, false));
     const panel = nav.createDiv({
       cls: `vc-control-more-panel${this.moreOpen ? " is-open" : ""}`,
-      attr: { id: `vc-control-more-${this.instanceId}`, "data-open": String(this.moreOpen) }
+      attr: {
+        id: `vc-control-more-${this.instanceId}`,
+        "data-open": String(this.moreOpen),
+        "aria-hidden": String(!this.moreOpen),
+        "aria-label": "Additional control plane routes",
+        role: "region"
+      }
     });
     for (const route of ROUTE_DEFINITIONS.filter((candidate) => !candidate.mobilePrimary)) {
       const button = panel.createEl("button", { text: route.label });
@@ -2747,6 +3233,15 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
       if (route.id === activeRoute) button.setAttr("aria-current", "page");
       button.addEventListener("click", () => void this.navigate(route.id));
     }
+  }
+  setMoreOpen(open, restoreFocus) {
+    this.moreOpen = open;
+    const panel = this.contentEl.querySelector(`#vc-control-more-${this.instanceId}`);
+    panel?.toggleClass("is-open", open);
+    panel?.setAttr("data-open", String(open));
+    panel?.setAttr("aria-hidden", String(!open));
+    this.moreTrigger?.setAttr("aria-expanded", String(open));
+    if (restoreFocus) window.setTimeout(() => this.moreTrigger?.focus({ preventScroll: true }), 0);
   }
   renderRoute(container, route, live) {
     switch (route) {
@@ -2892,6 +3387,10 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     return false;
   }
   reconcileContextPresentation() {
+    const morePanel = this.contentEl.querySelector(`#vc-control-more-${this.instanceId}`);
+    if (this.moreOpen && morePanel && window.getComputedStyle(morePanel).display === "none") {
+      this.setMoreOpen(false, false);
+    }
     if (!this.contextOpen) return;
     const aside = this.contentEl.querySelector(`#vc-control-context-${this.instanceId}`);
     const close = aside?.querySelector(".vc-control-context-close");
@@ -2939,7 +3438,7 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     const grid = section.createDiv({ cls: "vc-control-router-grid" });
     const facts = [
       ["Latest played", live.latestLabel],
-      ["Player deployment", live.deploymentMode],
+      ["Deployment mode", live.deploymentMode],
       ["Current State next_session", live.nextSession === null ? "not declared as a positive integer" : String(live.nextSession)],
       ["Explicit active room", live.activeSessionRoom ?? "not selected"]
     ];
@@ -2960,9 +3459,34 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
     heading.createEl("h2", { text: "Route actions" });
     heading.createSpan({ text: `${actions.length} compiled controls` });
-    const grid = section.createDiv({ cls: "vc-control-grid" });
-    for (const action of actions) {
-      this.renderActionShell(grid, action, false, `route-${route}`);
+    if (!shouldGroupRouteActions(actions.length)) {
+      const grid = section.createDiv({ cls: "vc-control-grid" });
+      for (const action of actions) this.renderActionShell(grid, action, false, `route-${route}`);
+      return;
+    }
+    const groups = groupRouteActions(actions);
+    const groupNav = section.createEl("nav", {
+      cls: "vc-control-group-nav",
+      attr: { "aria-label": `${route} action groups` }
+    });
+    const groupLinks = groupNav.createEl("ul");
+    for (const bucket of groups) {
+      const groupId = `vc-control-action-group-${this.instanceId}-${route}-${attributeToken(bucket.group) ?? "group"}`;
+      const item = groupLinks.createEl("li");
+      const link = item.createEl("a", { href: `#${groupId}`, text: `${bucket.group} (${bucket.actions.length})` });
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        const target = this.contentEl.querySelector(`#${groupId}`);
+        target?.scrollIntoView({ block: "start" });
+        target?.focus({ preventScroll: true });
+      });
+    }
+    for (const bucket of groups) {
+      const groupId = `vc-control-action-group-${this.instanceId}-${route}-${attributeToken(bucket.group) ?? "group"}`;
+      const group = section.createEl("section", { cls: "vc-control-action-group" });
+      group.createEl("h3", { text: bucket.group, attr: { id: groupId, tabindex: "-1" } });
+      const grid = group.createDiv({ cls: "vc-control-grid" });
+      for (const action of bucket.actions) this.renderActionShell(grid, action, false, `route-${route}`);
     }
   }
   renderActionShell(container, action, compact, scope) {
@@ -3023,12 +3547,15 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     }
   }
   renderEntityNavigator(container) {
+    const headingId = `vc-control-entity-heading-${this.instanceId}`;
+    const countId = `vc-control-entity-count-${this.instanceId}`;
+    const resultsId = `vc-control-entity-results-${this.instanceId}`;
     const section = container.createEl("section", {
       cls: "vc-control-section",
-      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-label": "Entity navigator" }
+      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-labelledby": headingId }
     });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: "Entity Navigator" });
+    heading.createEl("h2", { text: "Entity Navigator", attr: { id: headingId } });
     heading.createSpan({ text: "CACHED FRONTMATTER / FIXED ROOTS" });
     const index = this.plugin.getEntityIndex();
     const toolbar = section.createDiv({ cls: "vc-control-entity-toolbar" });
@@ -3040,18 +3567,32 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
       placeholder: "Title, alias, tag, status, or path"
     });
     search.dataset.vcFocus = "entity-search";
+    search.setAttr("aria-controls", `${countId} ${resultsId}`);
+    search.setAttr("aria-describedby", countId);
     const filters = toolbar.createDiv({ cls: "vc-control-entity-filters" });
     const typeLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
     typeLabel.createSpan({ text: "Type" });
     const typeSelect = typeLabel.createEl("select");
     typeSelect.dataset.vcFocus = "entity-type";
+    typeSelect.setAttr("aria-controls", `${countId} ${resultsId}`);
+    typeSelect.setAttr("aria-describedby", countId);
     const statusLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
     statusLabel.createSpan({ text: "Status" });
     const statusSelect = statusLabel.createEl("select");
     statusSelect.dataset.vcFocus = "entity-status";
-    const count = section.createEl("p", { cls: "vc-control-entity-count" });
-    const results = section.createEl("ul", { cls: "vc-control-entity-results" });
-    const update = () => {
+    statusSelect.setAttr("aria-controls", `${countId} ${resultsId}`);
+    statusSelect.setAttr("aria-describedby", countId);
+    const count = section.createEl("p", { cls: "vc-control-entity-count", attr: { id: countId } });
+    const results = section.createEl("ul", {
+      cls: "vc-control-entity-results",
+      attr: { id: resultsId, "aria-labelledby": headingId, "aria-describedby": countId }
+    });
+    const cancelPendingSearch = () => {
+      if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+      this.entitySearchTimer = null;
+      results.removeClass("is-loading");
+    };
+    const update = (announce = true) => {
       const filtered = filterEntityIndex(index, {
         query: this.entityQuery,
         types: this.entityType ? [this.entityType] : [],
@@ -3082,31 +3623,45 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
       } else {
         for (const entry of filtered.items) this.renderEntityResult(results, entry);
       }
-      this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
+      if (announce) this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
     };
     search.addEventListener("input", () => {
       this.entityQuery = search.value;
-      update();
+      cancelPendingSearch();
+      results.addClass("is-loading");
+      this.entitySearchTimer = window.setTimeout(() => {
+        this.entitySearchTimer = null;
+        results.removeClass("is-loading");
+        update();
+      }, ENTITY_SEARCH_DEBOUNCE_MS);
     });
     typeSelect.addEventListener("change", () => {
+      cancelPendingSearch();
       this.entityType = ENTITY_TYPES.includes(typeSelect.value) ? typeSelect.value : "";
       update();
     });
     statusSelect.addEventListener("change", () => {
+      cancelPendingSearch();
       this.entityStatus = statusSelect.value;
       update();
     });
-    update();
+    update(false);
   }
   renderEntityResult(container, entry) {
+    const token = `${this.instanceId}-${stableDomIdToken(entry.path)}`;
+    const titleId = `vc-control-entity-title-${token}`;
+    const pathId = `vc-control-entity-path-${token}`;
+    const badgesId = `vc-control-entity-badges-${token}`;
     const item = container.createEl("li");
     const button = item.createEl("button", { cls: "vc-control-entity-result" });
     button.type = "button";
     button.dataset.vcFocus = `entity-${entry.path}`;
+    button.setAttr("aria-labelledby", titleId);
+    button.setAttr("aria-describedby", `${pathId} ${badgesId}`);
     const copy = button.createSpan({ cls: "vc-control-entity-result-copy" });
-    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title });
-    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path });
-    const badges = button.createSpan({ cls: "vc-control-entity-badges" });
+    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title, attr: { id: titleId } });
+    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path, attr: { id: pathId } });
+    const badges = button.createSpan({ cls: "vc-control-entity-badges", attr: { id: badgesId } });
     badges.createSpan({ cls: "vc-control-entity-badge", text: entry.type.toUpperCase() });
     if (entry.status) badges.createSpan({ cls: "vc-control-entity-badge", text: entry.status });
     if (entry.audience) badges.createSpan({ cls: "vc-control-entity-badge", text: `AUDIENCE ${entry.audience}` });
@@ -3114,22 +3669,31 @@ var ControlPlaneView = class extends import_obsidian3.ItemView {
     button.addEventListener("click", () => void this.plugin.openEntityPath(entry.path));
   }
   renderCapabilityInventory(container) {
-    const section = container.createEl("section", { cls: "vc-control-health", attr: { "aria-label": "Capability inventory" } });
+    const section = container.createEl("section", {
+      cls: "vc-control-health vc-control-capabilities",
+      attr: { "aria-label": "Interface capability registry" }
+    });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: "Capability inventory" });
-    heading.createSpan({ text: "COMPILED ADAPTERS / FAIL CLOSED" });
-    const list = section.createEl("ul", { cls: "vc-control-health-list" });
-    for (const action of CONTROL_ACTIONS.filter(
-      (candidate) => ["command", "integration", "script", "external"].includes(candidate.kind)
-    )) {
-      const availability = this.plugin.getAvailability(action);
-      const item = list.createEl("li", { cls: availability.available ? "is-pass" : "is-attention" });
+    heading.createEl("h2", { text: "Interface stack" });
+    heading.createSpan({ text: "FIXED OWNERS / LOCAL STATUS / REPLACEMENT BOUNDARIES" });
+    const list = section.createEl("ul", { cls: "vc-control-capability-list" });
+    for (const capability of INTERFACE_CAPABILITIES) {
+      const status = capabilityRuntimeStatus(capability, {
+        pluginEnabled: (id) => this.plugin.pluginEnabled(id),
+        commandAvailable: (id) => this.plugin.commandAvailable(id)
+      });
+      const item = list.createEl("li", { cls: `is-${status.state}` });
       item.createEl("span", {
         cls: "vc-control-health-state",
-        text: availability.available ? "AVAILABLE" : "UNAVAILABLE"
+        text: status.state.toUpperCase()
       });
-      item.createEl("strong", { text: action.title });
-      item.createSpan({ text: availability.reason ?? `${action.kind.toUpperCase()} adapter is available.` });
+      const copy = item.createDiv({ cls: "vc-control-capability-copy" });
+      copy.createEl("strong", { text: capability.capability });
+      copy.createSpan({ text: `Owner: ${capability.owner}` });
+      copy.createEl("small", { text: capability.boundary });
+      copy.createEl("code", {
+        text: status.required === 0 ? "No runtime requirements" : `${status.available}/${status.required} fixed requirements${status.missing.length ? `; missing ${status.missing.join(", ")}` : ""}`
+      });
     }
   }
   renderRecentRuns(container) {
@@ -3241,6 +3805,12 @@ var ControlPlaneSettingTab = class extends import_obsidian3.PluginSettingTab {
         this.plugin.applyProfilesToAllLeaves();
       })
     );
+    new import_obsidian3.Setting(containerEl).setName("Startup surface").setDesc("Open or reuse one Control Plane tab when Obsidian's layout is ready, or leave the saved layout unchanged.").addDropdown(
+      (dropdown) => dropdown.addOption("control-plane", "Control Plane").addOption("none", "Saved layout only").setValue(this.plugin.settings.startupSurface).onChange(async (value) => {
+        this.plugin.settings.startupSurface = normalizeStartupSurface(value);
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian3.Setting(containerEl).setName("Active AI context profile").setDesc("Retrieval policy contract only. Every profile remains read-only toward canonical owners.").addDropdown((dropdown) => {
       for (const profile of CONTEXT_PROFILES) dropdown.addOption(profile.id, profile.title);
       dropdown.setValue(this.plugin.settings.activeContextProfile).onChange(async (value) => {
@@ -3280,24 +3850,57 @@ var ControlPlaneSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian3.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.").addText(
-      (text) => text.setPlaceholder(DEFAULT_SETTINGS.mapUrl).setValue(this.plugin.settings.mapUrl).onChange(async (value) => {
+    const mapSetting = new import_obsidian3.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.");
+    const mapErrorId = `vc-control-map-url-error-${crypto.randomUUID()}`;
+    const mapError = mapSetting.descEl.createDiv({
+      cls: "vc-control-setting-error",
+      attr: { id: mapErrorId, role: "status", "aria-live": "polite" }
+    });
+    mapSetting.addText((text) => {
+      text.inputEl.setAttr("aria-describedby", mapErrorId);
+      const validate = (value) => {
         const trimmed = value.trim();
-        if (trimmed && isSafeMapUrl(trimmed)) {
+        const valid = Boolean(trimmed && isSafeMapUrl(trimmed));
+        setFieldValidation(
+          text.inputEl,
+          mapError,
+          valid,
+          "Enter an http://127.0.0.1, http://localhost, or http://[::1] URL without credentials."
+        );
+        return valid;
+      };
+      text.setPlaceholder(DEFAULT_SETTINGS.mapUrl).setValue(this.plugin.settings.mapUrl).onChange(async (value) => {
+        const trimmed = value.trim();
+        if (validate(value)) {
           this.plugin.settings.mapUrl = trimmed;
           await this.plugin.saveSettings();
         }
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Automation timeout").setDesc("Seconds before a foreground audit is terminated. Range: 5\u2013300.").addText(
-      (text) => text.setValue(String(this.plugin.settings.scriptTimeoutSeconds)).onChange(async (value) => {
+      });
+      validate(this.plugin.settings.mapUrl);
+    });
+    const timeoutSetting = new import_obsidian3.Setting(containerEl).setName("Automation timeout").setDesc("Seconds before a foreground audit is terminated. Range: 5\u2013300.");
+    const timeoutErrorId = `vc-control-timeout-error-${crypto.randomUUID()}`;
+    const timeoutError = timeoutSetting.descEl.createDiv({
+      cls: "vc-control-setting-error",
+      attr: { id: timeoutErrorId, role: "status", "aria-live": "polite" }
+    });
+    timeoutSetting.addText((text) => {
+      text.inputEl.setAttr("aria-describedby", timeoutErrorId);
+      const validate = (value) => {
         const parsed = Number.parseInt(value, 10);
-        if (Number.isFinite(parsed) && parsed >= 5 && parsed <= 300) {
+        const valid = /^\d+$/.test(value.trim()) && Number.isFinite(parsed) && parsed >= 5 && parsed <= 300;
+        setFieldValidation(text.inputEl, timeoutError, valid, "Enter a whole number from 5 through 300.");
+        return valid ? parsed : null;
+      };
+      text.setValue(String(this.plugin.settings.scriptTimeoutSeconds)).onChange(async (value) => {
+        const parsed = validate(value);
+        if (parsed !== null) {
           this.plugin.settings.scriptTimeoutSeconds = parsed;
           await this.plugin.saveSettings();
         }
-      })
-    );
+      });
+      validate(String(this.plugin.settings.scriptTimeoutSeconds));
+    });
   }
 };
 var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
@@ -3315,6 +3918,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   pendingProposalModals = /* @__PURE__ */ new Set();
   pendingCommandSearchModals = /* @__PURE__ */ new Set();
   commandSearchRefreshPending = false;
+  activationPromise = null;
   entityIndex = null;
   transactionInProgress = false;
   refreshTimer = null;
@@ -3340,6 +3944,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     }
     this.registerMarkdownCodeBlockProcessor("vcg-control", (source, element) => {
       this.renderControlBlock(source, element);
+    });
+    this.registerMarkdownCodeBlockProcessor("ad-statblock", async (source, element, context) => {
+      await this.renderAdStatblock(source, element, context.sourcePath);
     });
     this.registerMarkdownPostProcessor(() => this.scheduleRefresh(0));
     this.registerObsidianProtocolHandler("vc-control", (parameters) => {
@@ -3380,6 +3987,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         })
       );
       this.scheduleRefresh(0);
+      if (this.settings.startupSurface === "control-plane") void this.activateView();
     });
   }
   onunload() {
@@ -3437,6 +4045,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       activeSessionName,
       activeContextProfile: isContextProfileId(saved.activeContextProfile) ? saved.activeContextProfile : DEFAULT_SETTINGS.activeContextProfile,
       activeRoute: isPrimaryRoute(saved.activeRoute) ? saved.activeRoute : DEFAULT_SETTINGS.activeRoute,
+      startupSurface: normalizeStartupSurface(saved.startupSurface),
       favoriteActionIds: normalizeFavoriteActionIds(saved.favoriteActionIds, actionIds),
       recentActions: normalizeRecentActions(saved.recentActions, ACTION_BY_ID.keys()),
       recentRuns: recentRuns.slice(0, 8).map((run) => ({
@@ -3454,13 +4063,28 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     await this.saveData(this.settings);
   }
   async activateView(section) {
+    let leaf;
+    if (this.activationPromise) {
+      leaf = await this.activationPromise;
+    } else {
+      const activation = this.activateControlPlaneLeaf();
+      this.activationPromise = activation;
+      try {
+        leaf = await activation;
+      } finally {
+        if (this.activationPromise === activation) this.activationPromise = null;
+      }
+    }
+    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+  }
+  async activateControlPlaneLeaf() {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
-    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+    return leaf;
   }
   async setActiveRoute(route) {
     if (!isPrimaryRoute(route)) return;
@@ -3487,7 +4111,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       this.refreshTimer = null;
       if (this.unloading) return;
       this.applyProfilesToAllLeaves();
-      void this.refreshViews("Control plane state refreshed.");
+      void this.refreshViews();
     }, delay);
   }
   openCommandSearch(opener, announce) {
@@ -3669,6 +4293,31 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       });
       alert.createEl("strong", { text: "Invalid vcg-control block" });
       alert.createEl("p", { text: message });
+    }
+  }
+  async renderAdStatblock(source, element, sourcePath) {
+    element.empty();
+    element.addClass("vc-ad-statblock-host");
+    const spec = parseAdStatblock(source);
+    const section = element.createEl("section", { cls: "vc-ad-statblock" });
+    const titleId = `vc-ad-statblock-title-${crypto.randomUUID()}`;
+    section.setAttr("aria-labelledby", titleId);
+    const header = section.createEl("header", { cls: "vc-ad-statblock-header" });
+    header.createEl("h3", { text: spec.title, attr: { id: titleId } });
+    header.createSpan({ text: "REFERENCE / NON-EXECUTABLE MARKDOWN" });
+    const body = section.createDiv({ cls: "vc-ad-statblock-body" });
+    const safeMarkdown = sanitizeAdStatblockMarkdown(spec.markdown);
+    if (!safeMarkdown) {
+      body.createEl("p", { cls: "vc-control-empty", text: "No statblock details were supplied." });
+      return;
+    }
+    try {
+      await import_obsidian3.MarkdownRenderer.render(this.app, safeMarkdown, body, sourcePath, this);
+    } catch (error) {
+      body.empty();
+      const alert = body.createEl("div", { cls: "vc-control-block-error", attr: { role: "alert" } });
+      alert.createEl("strong", { text: "Statblock rendering failed" });
+      alert.createEl("p", { text: error instanceof Error ? error.message : String(error) });
     }
   }
   getAvailability(action) {
@@ -4143,14 +4792,23 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     const active = this.requireActiveSession();
     const intakePath = `${active.roomPath}/${active.displayName} Decision Intake.md`;
     const intake = this.fileAt(intakePath);
-    if (!intake) throw new Error(`Decision Intake is missing: ${intakePath}`);
-    const declarationEvidence = await this.app.vault.cachedRead(intake);
+    const currentState = this.fileAt(CURRENT_STATE_PATH);
+    const [decisionIntakeContents, currentStateContents] = await Promise.all([
+      intake ? this.app.vault.read(intake) : Promise.resolve(null),
+      currentState ? this.app.vault.read(currentState) : Promise.resolve(null)
+    ]);
     const live = await this.readLiveState();
+    const selectionEvidence = collectRunSelectionEvidence({
+      roomPath: active.roomPath,
+      displayName: active.displayName,
+      decisionIntakeContents,
+      currentStateContents
+    });
     this.reviewProposal(
       buildRunProposal({
         roomPath: active.roomPath,
         displayName: active.displayName,
-        declarationEvidence,
+        selectionEvidence,
         latestPlayedLabel: live.latestLabel,
         createdDate: this.today(),
         proposalId: this.proposalId("run")
@@ -4298,6 +4956,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         }
         return { operation, baseline, mode: resolveOperationMode(operation, baseline.kind) };
       }));
+      await this.assertEvidenceSourcesUnchanged(proposal);
       if (this.unloading) throw new Error("The plugin unloaded after transaction preflight.");
       for (const item of plan) {
         if (this.unloading) throw new Error("The plugin unloaded before all reviewed operations completed.");
@@ -4355,6 +5014,16 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     } finally {
       this.transactionInProgress = false;
       if (!this.unloading) await this.refreshViews();
+    }
+  }
+  async assertEvidenceSourcesUnchanged(proposal) {
+    for (const baseline of proposal.evidenceBaselines ?? []) {
+      const source = this.app.vault.getAbstractFileByPath(baseline.path);
+      if (!(source instanceof import_obsidian3.TFile)) throw new Error(`Reviewed evidence source is no longer a file: ${baseline.path}`);
+      const contents = await this.app.vault.read(source);
+      if (!targetMatchesBaseline(baseline, "file", contents, source.stat.mtime, source.stat.size)) {
+        throw new Error(`Evidence source changed after preview: ${baseline.path}`);
+      }
     }
   }
   preflightParentFolders(filePath) {
@@ -4712,6 +5381,11 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     if (!manager) return false;
     if (typeof manager.findCommand === "function") return Boolean(manager.findCommand(id));
     return Boolean(manager.commands && Object.prototype.hasOwnProperty.call(manager.commands, id));
+  }
+  pluginEnabled(id) {
+    const manager = this.app.plugins;
+    if (!manager || typeof manager !== "object") return false;
+    return Boolean(manager.enabledPlugins?.has(id) || manager.plugins?.[id]);
   }
   executeCommand(id) {
     const manager = this.commandManager();

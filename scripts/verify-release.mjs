@@ -57,7 +57,9 @@ for (const file of [
   "src/main.ts",
   "src/navigation.ts",
   "src/operating.ts",
-  "src/paths.ts"
+  "src/paths.ts",
+  "src/ui-contract.ts",
+  "src/capabilities.ts"
 ]) {
   const contents = readFileSync(file, "utf8");
   for (const root of removedVaultRoots) {
@@ -69,7 +71,7 @@ const actionSource = readFileSync("src/actions.ts", "utf8");
 const actionIds = [...actionSource.matchAll(/^\s{4}id: "([a-z0-9-]+)",$/gm)].map((match) => match[1]);
 const duplicateActionIds = actionIds.filter((id, index) => actionIds.indexOf(id) !== index);
 if (duplicateActionIds.length > 0) errors.push(`duplicate action IDs: ${[...new Set(duplicateActionIds)].join(", ")}`);
-if (actionIds.length !== 55) errors.push(`compiled action registry must contain exactly 55 actions; got ${actionIds.length}`);
+if (actionIds.length !== 56) errors.push(`compiled action registry must contain exactly 56 actions; got ${actionIds.length}`);
 for (const file of ["src/actions.ts", "main.js", "companion/vcg_control.py"]) {
   const contents = readFileSync(file, "utf8");
   for (const retiredToken of ["tactical-ready", "--strict-ready"]) {
@@ -79,6 +81,7 @@ for (const file of ["src/actions.ts", "main.js", "companion/vcg_control.py"]) {
 for (const requiredAction of [
   "open-live-edge-router",
   "open-command-search",
+  "open-omnisearch",
   "open-entity-navigator",
   "open-quick-switcher",
   "open-bookmarks",
@@ -134,6 +137,8 @@ const mainSource = readFileSync("src/main.ts", "utf8");
 const operatingSource = readFileSync("src/operating.ts", "utf8");
 const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
 const stylesSource = readFileSync("styles.css", "utf8");
+const uiContractSource = readFileSync("src/ui-contract.ts", "utf8");
+const capabilitiesSource = readFileSync("src/capabilities.ts", "utf8");
 if (mainSource.includes("findLatestPlayedFallback")) errors.push("src/main.ts retains forbidden latest-played filename inference");
 if (!mainSource.includes("transactionInProgress")) errors.push("src/main.ts is missing the transaction mutex");
 if (!mainSource.includes("targetMatchesBaseline") || !mainSource.includes("contentHash(current)")) {
@@ -160,6 +165,50 @@ if (!operatingSource.includes('MANAGED_WRITE_ROOTS') || !operatingSource.include
 }
 if (!actionSource.match(/id: "open-terminal"[\s\S]*?protocolSafe: false/)) {
   errors.push("open-terminal must remain protocol-unsafe");
+}
+if (!actionSource.match(/id: "open-omnisearch"[\s\S]*?target: "omnisearch:show-modal"/)) {
+  errors.push("open-omnisearch must remain bound to the verified fixed Omnisearch command");
+}
+if (
+  !mainSource.includes('startupSurface: StartupSurface') ||
+  !mainSource.includes('normalizeStartupSurface(saved.startupSurface)') ||
+  !mainSource.includes('this.activationPromise')
+) {
+  errors.push("src/main.ts is missing startup-surface normalization or singleton activation");
+}
+if (
+  !mainSource.includes('setAttribute("role", "status")') ||
+  !mainSource.includes('escapeSurface(this.contextOpen, this.moreOpen)') ||
+  !mainSource.includes('ENTITY_SEARCH_DEBOUNCE_MS') ||
+  !mainSource.includes('aria-labelledby') ||
+  !mainSource.includes('aria-describedby')
+) {
+  errors.push("src/main.ts is missing 1.3 live-region, disclosure, or entity-search accessibility contracts");
+}
+if (
+  !mainSource.includes('registerMarkdownCodeBlockProcessor("ad-statblock"') ||
+  !mainSource.includes('MarkdownRenderer.render') ||
+  !uiContractSource.includes("sanitizeAdStatblockMarkdown") ||
+  !uiContractSource.includes("BUTTON|INPUT|VIEW")
+) {
+  errors.push("1.3 sources are missing the non-executable ad-statblock renderer");
+}
+for (const retiredCompatSelector of ['data-type^="custom-frames-"', 'data-type="terminal-view"']) {
+  if (stylesSource.includes(retiredCompatSelector)) {
+    errors.push(`styles.css owns third-party chrome that belongs in vcg-compat.css: ${retiredCompatSelector}`);
+  }
+}
+if (!mainSource.includes("INTERFACE_CAPABILITIES") || !capabilitiesSource.includes("omnisearch:show-modal")) {
+  errors.push("1.3 sources are missing the fixed local capability registry");
+}
+if (stylesSource.includes("@media (max-width:")) {
+  errors.push("styles.css uses viewport width for leaf-dependent reflow; use the control-plane container");
+}
+if (/\.vc-control-(?:action|command-result)[^{]*is-unavailable[^}]*opacity/s.test(stylesSource)) {
+  errors.push("styles.css applies parent opacity to unavailable controls");
+}
+for (const requiredStyle of [".vc-ad-statblock", "@container vc-ad-statblock", ".vc-control-group-nav", ".vc-control-capability-list"]) {
+  if (!stylesSource.includes(requiredStyle)) errors.push(`styles.css is missing 1.3 surface: ${requiredStyle}`);
 }
 
 if (errors.length > 0) {

@@ -3,6 +3,7 @@ import {
   FileView,
   FileSystemAdapter,
   ItemView,
+  MarkdownRenderer,
   MarkdownView,
   Modal,
   Notice,
@@ -27,6 +28,7 @@ import {
   type ControlAction
 } from "./actions";
 import { ControlActionSearchModal } from "./command-search";
+import { INTERFACE_CAPABILITIES, capabilityRuntimeStatus } from "./capabilities";
 import {
   buildEntityIndex,
   deriveEntityType,
@@ -56,6 +58,7 @@ import {
   buildSessionRoomProposal,
   buildTranscriptionRequestProposal,
   CAPABILITY_POLICY,
+  collectRunSelectionEvidence,
   contentMatchesExpected,
   contentHash,
   CONTEXT_PROFILES,
@@ -80,6 +83,17 @@ import {
   type WorkflowValues
 } from "./workflow-ui";
 import { sessionControlRoomPath, VAULT_PATHS } from "./paths";
+import {
+  ENTITY_SEARCH_DEBOUNCE_MS,
+  escapeSurface,
+  groupRouteActions,
+  normalizeStartupSurface,
+  parseAdStatblock,
+  sanitizeAdStatblockMarkdown,
+  shouldGroupRouteActions,
+  stableDomIdToken,
+  type StartupSurface
+} from "./ui-contract";
 
 const VIEW_TYPE = "veiled-chicago-control-plane";
 const CURRENT_STATE_PATH = VAULT_PATHS.currentState;
@@ -98,6 +112,7 @@ interface ControlPlaneSettings {
   activeSessionName: string | null;
   activeContextProfile: ContextProfileId;
   activeRoute: PrimaryRoute;
+  startupSurface: StartupSurface;
   favoriteActionIds: string[];
   recentActions: RecentActionRecord[];
   recentRuns: RunRecord[];
@@ -151,6 +166,11 @@ interface CommandManagerCompat {
   commands?: Record<string, unknown>;
 }
 
+interface PluginManagerCompat {
+  enabledPlugins?: ReadonlySet<string>;
+  plugins?: Record<string, unknown>;
+}
+
 const DEFAULT_SETTINGS: ControlPlaneSettings = {
   automationEnabled: false,
   autoProfiles: true,
@@ -163,6 +183,7 @@ const DEFAULT_SETTINGS: ControlPlaneSettings = {
   activeSessionName: null,
   activeContextProfile: "session-live",
   activeRoute: "home",
+  startupSurface: "control-plane",
   favoriteActionIds: [],
   recentActions: [],
   recentRuns: [],
@@ -215,6 +236,18 @@ function attributeToken(value: unknown): string | null {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return token || null;
+}
+
+function setFieldValidation(
+  input: HTMLInputElement,
+  error: HTMLElement,
+  valid: boolean,
+  message: string
+): void {
+  input.setAttr("aria-invalid", String(!valid));
+  input.toggleClass("is-invalid", !valid);
+  error.hidden = valid;
+  error.setText(valid ? "" : message);
 }
 
 function isRunRecord(value: unknown): value is RunRecord {
@@ -331,12 +364,14 @@ class ControlPlaneView extends ItemView {
   private readonly routeHistory: RouteHistory;
   private liveRegion: HTMLElement | null = null;
   private contextTrigger: HTMLButtonElement | null = null;
+  private moreTrigger: HTMLButtonElement | null = null;
   private contextOpen = false;
   private moreOpen = false;
   private entityQuery = "";
   private entityType: EntityType | "" = "";
   private entityStatus = "";
   private renderGeneration = 0;
+  private entitySearchTimer: number | null = null;
   private contextResizeObserver: ResizeObserver | null = null;
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Tab" && this.contextOpen && this.trapContextFocus(event)) return;
@@ -361,9 +396,15 @@ class ControlPlaneView extends ItemView {
       void this.navigate(route, false);
       return;
     }
-    if (event.key === "Escape" && this.contextOpen) {
-      event.preventDefault();
-      this.closeContext(true);
+    if (event.key === "Escape") {
+      const surface = escapeSurface(this.contextOpen, this.moreOpen);
+      if (surface === "context") {
+        event.preventDefault();
+        this.closeContext(true);
+      } else if (surface === "more") {
+        event.preventDefault();
+        this.setMoreOpen(false, true);
+      }
     }
   };
 
@@ -393,11 +434,15 @@ class ControlPlaneView extends ItemView {
 
   async onClose(): Promise<void> {
     this.contentEl.removeEventListener("keydown", this.handleKeydown);
+    if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+    this.entitySearchTimer = null;
     this.contextResizeObserver?.disconnect();
     this.contextResizeObserver = null;
   }
 
   async render(announcement?: string): Promise<void> {
+    if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+    this.entitySearchTimer = null;
     const generation = ++this.renderGeneration;
     const { contentEl } = this;
     const activeElement = document.activeElement;
@@ -408,6 +453,7 @@ class ControlPlaneView extends ItemView {
     const scrollTop = contentEl.scrollTop;
     const persistentLiveRegion = this.liveRegion ?? document.createElement("div");
     persistentLiveRegion.className = "vc-control-live-region";
+    persistentLiveRegion.setAttribute("role", "status");
     persistentLiveRegion.setAttribute("aria-live", "polite");
     persistentLiveRegion.setAttribute("aria-atomic", "true");
     persistentLiveRegion.remove();
@@ -546,6 +592,7 @@ class ControlPlaneView extends ItemView {
 
     const moreItem = list.createEl("li");
     const more = moreItem.createEl("button");
+    this.moreTrigger = more;
     more.type = "button";
     more.dataset.vcFocus = "mobile-more";
     more.setAttr("aria-expanded", String(this.moreOpen));
@@ -555,17 +602,17 @@ class ControlPlaneView extends ItemView {
     moreIcon.setAttr("aria-hidden", "true");
     setIcon(moreIcon, "ellipsis");
     more.createSpan({ text: "More" });
-    more.addEventListener("click", () => {
-      this.moreOpen = !this.moreOpen;
-      const panel = this.contentEl.querySelector<HTMLElement>(`#vc-control-more-${this.instanceId}`);
-      panel?.toggleClass("is-open", this.moreOpen);
-      panel?.setAttr("data-open", String(this.moreOpen));
-      more.setAttr("aria-expanded", String(this.moreOpen));
-    });
+    more.addEventListener("click", () => this.setMoreOpen(!this.moreOpen, false));
 
     const panel = nav.createDiv({
       cls: `vc-control-more-panel${this.moreOpen ? " is-open" : ""}`,
-      attr: { id: `vc-control-more-${this.instanceId}`, "data-open": String(this.moreOpen) }
+      attr: {
+        id: `vc-control-more-${this.instanceId}`,
+        "data-open": String(this.moreOpen),
+        "aria-hidden": String(!this.moreOpen),
+        "aria-label": "Additional control plane routes",
+        role: "region"
+      }
     });
     for (const route of ROUTE_DEFINITIONS.filter((candidate) => !candidate.mobilePrimary)) {
       const button = panel.createEl("button", { text: route.label });
@@ -574,6 +621,16 @@ class ControlPlaneView extends ItemView {
       if (route.id === activeRoute) button.setAttr("aria-current", "page");
       button.addEventListener("click", () => void this.navigate(route.id));
     }
+  }
+
+  private setMoreOpen(open: boolean, restoreFocus: boolean): void {
+    this.moreOpen = open;
+    const panel = this.contentEl.querySelector<HTMLElement>(`#vc-control-more-${this.instanceId}`);
+    panel?.toggleClass("is-open", open);
+    panel?.setAttr("data-open", String(open));
+    panel?.setAttr("aria-hidden", String(!open));
+    this.moreTrigger?.setAttr("aria-expanded", String(open));
+    if (restoreFocus) window.setTimeout(() => this.moreTrigger?.focus({ preventScroll: true }), 0);
   }
 
   private renderRoute(container: HTMLElement, route: PrimaryRoute, live: LiveState): void {
@@ -736,6 +793,10 @@ class ControlPlaneView extends ItemView {
   }
 
   private reconcileContextPresentation(): void {
+    const morePanel = this.contentEl.querySelector<HTMLElement>(`#vc-control-more-${this.instanceId}`);
+    if (this.moreOpen && morePanel && window.getComputedStyle(morePanel).display === "none") {
+      this.setMoreOpen(false, false);
+    }
     if (!this.contextOpen) return;
     const aside = this.contentEl.querySelector<HTMLElement>(`#vc-control-context-${this.instanceId}`);
     const close = aside?.querySelector<HTMLElement>(".vc-control-context-close");
@@ -788,7 +849,7 @@ class ControlPlaneView extends ItemView {
     const grid = section.createDiv({ cls: "vc-control-router-grid" });
     const facts = [
       ["Latest played", live.latestLabel],
-      ["Player deployment", live.deploymentMode],
+      ["Deployment mode", live.deploymentMode],
       ["Current State next_session", live.nextSession === null ? "not declared as a positive integer" : String(live.nextSession)],
       ["Explicit active room", live.activeSessionRoom ?? "not selected"]
     ] as const;
@@ -810,9 +871,36 @@ class ControlPlaneView extends ItemView {
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
     heading.createEl("h2", { text: "Route actions" });
     heading.createSpan({ text: `${actions.length} compiled controls` });
-    const grid = section.createDiv({ cls: "vc-control-grid" });
-    for (const action of actions) {
-      this.renderActionShell(grid, action, false, `route-${route}`);
+    if (!shouldGroupRouteActions(actions.length)) {
+      const grid = section.createDiv({ cls: "vc-control-grid" });
+      for (const action of actions) this.renderActionShell(grid, action, false, `route-${route}`);
+      return;
+    }
+
+    const groups = groupRouteActions(actions);
+    const groupNav = section.createEl("nav", {
+      cls: "vc-control-group-nav",
+      attr: { "aria-label": `${route} action groups` }
+    });
+    const groupLinks = groupNav.createEl("ul");
+    for (const bucket of groups) {
+      const groupId = `vc-control-action-group-${this.instanceId}-${route}-${attributeToken(bucket.group) ?? "group"}`;
+      const item = groupLinks.createEl("li");
+      const link = item.createEl("a", { href: `#${groupId}`, text: `${bucket.group} (${bucket.actions.length})` });
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        const target = this.contentEl.querySelector<HTMLElement>(`#${groupId}`);
+        target?.scrollIntoView({ block: "start" });
+        target?.focus({ preventScroll: true });
+      });
+    }
+
+    for (const bucket of groups) {
+      const groupId = `vc-control-action-group-${this.instanceId}-${route}-${attributeToken(bucket.group) ?? "group"}`;
+      const group = section.createEl("section", { cls: "vc-control-action-group" });
+      group.createEl("h3", { text: bucket.group, attr: { id: groupId, tabindex: "-1" } });
+      const grid = group.createDiv({ cls: "vc-control-grid" });
+      for (const action of bucket.actions) this.renderActionShell(grid, action, false, `route-${route}`);
     }
   }
 
@@ -877,12 +965,15 @@ class ControlPlaneView extends ItemView {
   }
 
   private renderEntityNavigator(container: HTMLElement): void {
+    const headingId = `vc-control-entity-heading-${this.instanceId}`;
+    const countId = `vc-control-entity-count-${this.instanceId}`;
+    const resultsId = `vc-control-entity-results-${this.instanceId}`;
     const section = container.createEl("section", {
       cls: "vc-control-section",
-      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-label": "Entity navigator" }
+      attr: { "data-vc-section": "entity-navigator", tabindex: "-1", "aria-labelledby": headingId }
     });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: "Entity Navigator" });
+    heading.createEl("h2", { text: "Entity Navigator", attr: { id: headingId } });
     heading.createSpan({ text: "CACHED FRONTMATTER / FIXED ROOTS" });
 
     const index = this.plugin.getEntityIndex();
@@ -895,21 +986,35 @@ class ControlPlaneView extends ItemView {
       placeholder: "Title, alias, tag, status, or path"
     });
     search.dataset.vcFocus = "entity-search";
+    search.setAttr("aria-controls", `${countId} ${resultsId}`);
+    search.setAttr("aria-describedby", countId);
 
     const filters = toolbar.createDiv({ cls: "vc-control-entity-filters" });
     const typeLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
     typeLabel.createSpan({ text: "Type" });
     const typeSelect = typeLabel.createEl("select");
     typeSelect.dataset.vcFocus = "entity-type";
+    typeSelect.setAttr("aria-controls", `${countId} ${resultsId}`);
+    typeSelect.setAttr("aria-describedby", countId);
 
     const statusLabel = filters.createEl("label", { cls: "vc-control-entity-filter" });
     statusLabel.createSpan({ text: "Status" });
     const statusSelect = statusLabel.createEl("select");
     statusSelect.dataset.vcFocus = "entity-status";
+    statusSelect.setAttr("aria-controls", `${countId} ${resultsId}`);
+    statusSelect.setAttr("aria-describedby", countId);
 
-    const count = section.createEl("p", { cls: "vc-control-entity-count" });
-    const results = section.createEl("ul", { cls: "vc-control-entity-results" });
-    const update = (): void => {
+    const count = section.createEl("p", { cls: "vc-control-entity-count", attr: { id: countId } });
+    const results = section.createEl("ul", {
+      cls: "vc-control-entity-results",
+      attr: { id: resultsId, "aria-labelledby": headingId, "aria-describedby": countId }
+    });
+    const cancelPendingSearch = (): void => {
+      if (this.entitySearchTimer !== null) window.clearTimeout(this.entitySearchTimer);
+      this.entitySearchTimer = null;
+      results.removeClass("is-loading");
+    };
+    const update = (announce = true): void => {
       const filtered = filterEntityIndex(index, {
         query: this.entityQuery,
         types: this.entityType ? [this.entityType] : [],
@@ -944,32 +1049,46 @@ class ControlPlaneView extends ItemView {
       } else {
         for (const entry of filtered.items) this.renderEntityResult(results, entry);
       }
-      this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
+      if (announce) this.announce(`${filtered.total} entities match; ${filtered.shown} shown.`);
     };
     search.addEventListener("input", () => {
       this.entityQuery = search.value;
-      update();
+      cancelPendingSearch();
+      results.addClass("is-loading");
+      this.entitySearchTimer = window.setTimeout(() => {
+        this.entitySearchTimer = null;
+        results.removeClass("is-loading");
+        update();
+      }, ENTITY_SEARCH_DEBOUNCE_MS);
     });
     typeSelect.addEventListener("change", () => {
+      cancelPendingSearch();
       this.entityType = ENTITY_TYPES.includes(typeSelect.value as EntityType) ? (typeSelect.value as EntityType) : "";
       update();
     });
     statusSelect.addEventListener("change", () => {
+      cancelPendingSearch();
       this.entityStatus = statusSelect.value;
       update();
     });
-    update();
+    update(false);
   }
 
   private renderEntityResult(container: HTMLElement, entry: EntityIndexEntry): void {
+    const token = `${this.instanceId}-${stableDomIdToken(entry.path)}`;
+    const titleId = `vc-control-entity-title-${token}`;
+    const pathId = `vc-control-entity-path-${token}`;
+    const badgesId = `vc-control-entity-badges-${token}`;
     const item = container.createEl("li");
     const button = item.createEl("button", { cls: "vc-control-entity-result" });
     button.type = "button";
     button.dataset.vcFocus = `entity-${entry.path}`;
+    button.setAttr("aria-labelledby", titleId);
+    button.setAttr("aria-describedby", `${pathId} ${badgesId}`);
     const copy = button.createSpan({ cls: "vc-control-entity-result-copy" });
-    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title });
-    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path });
-    const badges = button.createSpan({ cls: "vc-control-entity-badges" });
+    copy.createSpan({ cls: "vc-control-entity-result-title", text: entry.title, attr: { id: titleId } });
+    copy.createSpan({ cls: "vc-control-entity-result-path", text: entry.path, attr: { id: pathId } });
+    const badges = button.createSpan({ cls: "vc-control-entity-badges", attr: { id: badgesId } });
     badges.createSpan({ cls: "vc-control-entity-badge", text: entry.type.toUpperCase() });
     if (entry.status) badges.createSpan({ cls: "vc-control-entity-badge", text: entry.status });
     if (entry.audience) badges.createSpan({ cls: "vc-control-entity-badge", text: `AUDIENCE ${entry.audience}` });
@@ -978,22 +1097,34 @@ class ControlPlaneView extends ItemView {
   }
 
   private renderCapabilityInventory(container: HTMLElement): void {
-    const section = container.createEl("section", { cls: "vc-control-health", attr: { "aria-label": "Capability inventory" } });
+    const section = container.createEl("section", {
+      cls: "vc-control-health vc-control-capabilities",
+      attr: { "aria-label": "Interface capability registry" }
+    });
     const heading = section.createDiv({ cls: "vc-control-section-heading" });
-    heading.createEl("h2", { text: "Capability inventory" });
-    heading.createSpan({ text: "COMPILED ADAPTERS / FAIL CLOSED" });
-    const list = section.createEl("ul", { cls: "vc-control-health-list" });
-    for (const action of CONTROL_ACTIONS.filter((candidate) =>
-      ["command", "integration", "script", "external"].includes(candidate.kind)
-    )) {
-      const availability = this.plugin.getAvailability(action);
-      const item = list.createEl("li", { cls: availability.available ? "is-pass" : "is-attention" });
+    heading.createEl("h2", { text: "Interface stack" });
+    heading.createSpan({ text: "FIXED OWNERS / LOCAL STATUS / REPLACEMENT BOUNDARIES" });
+    const list = section.createEl("ul", { cls: "vc-control-capability-list" });
+    for (const capability of INTERFACE_CAPABILITIES) {
+      const status = capabilityRuntimeStatus(capability, {
+        pluginEnabled: (id) => this.plugin.pluginEnabled(id),
+        commandAvailable: (id) => this.plugin.commandAvailable(id)
+      });
+      const item = list.createEl("li", { cls: `is-${status.state}` });
       item.createEl("span", {
         cls: "vc-control-health-state",
-        text: availability.available ? "AVAILABLE" : "UNAVAILABLE"
+        text: status.state.toUpperCase()
       });
-      item.createEl("strong", { text: action.title });
-      item.createSpan({ text: availability.reason ?? `${action.kind.toUpperCase()} adapter is available.` });
+      const copy = item.createDiv({ cls: "vc-control-capability-copy" });
+      copy.createEl("strong", { text: capability.capability });
+      copy.createSpan({ text: `Owner: ${capability.owner}` });
+      copy.createEl("small", { text: capability.boundary });
+      copy.createEl("code", {
+        text:
+          status.required === 0
+            ? "No runtime requirements"
+            : `${status.available}/${status.required} fixed requirements${status.missing.length ? `; missing ${status.missing.join(", ")}` : ""}`
+      });
     }
   }
 
@@ -1119,6 +1250,20 @@ class ControlPlaneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Startup surface")
+      .setDesc("Open or reuse one Control Plane tab when Obsidian's layout is ready, or leave the saved layout unchanged.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("control-plane", "Control Plane")
+          .addOption("none", "Saved layout only")
+          .setValue(this.plugin.settings.startupSurface)
+          .onChange(async (value) => {
+            this.plugin.settings.startupSurface = normalizeStartupSurface(value);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Active AI context profile")
       .setDesc("Retrieval policy contract only. Every profile remains read-only toward canonical owners.")
       .addDropdown((dropdown) => {
@@ -1183,31 +1328,62 @@ class ControlPlaneSettingTab extends PluginSettingTab {
         })
       );
 
-    new Setting(containerEl)
+    const mapSetting = new Setting(containerEl)
       .setName("Local map URL")
-      .setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.")
-      .addText((text) =>
-        text.setPlaceholder(DEFAULT_SETTINGS.mapUrl).setValue(this.plugin.settings.mapUrl).onChange(async (value) => {
-          const trimmed = value.trim();
-          if (trimmed && isSafeMapUrl(trimmed)) {
-            this.plugin.settings.mapUrl = trimmed;
-            await this.plugin.saveSettings();
-          }
-        })
-      );
+      .setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.");
+    const mapErrorId = `vc-control-map-url-error-${crypto.randomUUID()}`;
+    const mapError = mapSetting.descEl.createDiv({
+      cls: "vc-control-setting-error",
+      attr: { id: mapErrorId, role: "status", "aria-live": "polite" }
+    });
+    mapSetting.addText((text) => {
+      text.inputEl.setAttr("aria-describedby", mapErrorId);
+      const validate = (value: string): boolean => {
+        const trimmed = value.trim();
+        const valid = Boolean(trimmed && isSafeMapUrl(trimmed));
+        setFieldValidation(
+          text.inputEl,
+          mapError,
+          valid,
+          "Enter an http://127.0.0.1, http://localhost, or http://[::1] URL without credentials."
+        );
+        return valid;
+      };
+      text.setPlaceholder(DEFAULT_SETTINGS.mapUrl).setValue(this.plugin.settings.mapUrl).onChange(async (value) => {
+        const trimmed = value.trim();
+        if (validate(value)) {
+          this.plugin.settings.mapUrl = trimmed;
+          await this.plugin.saveSettings();
+        }
+      });
+      validate(this.plugin.settings.mapUrl);
+    });
 
-    new Setting(containerEl)
+    const timeoutSetting = new Setting(containerEl)
       .setName("Automation timeout")
-      .setDesc("Seconds before a foreground audit is terminated. Range: 5–300.")
-      .addText((text) =>
-        text.setValue(String(this.plugin.settings.scriptTimeoutSeconds)).onChange(async (value) => {
-          const parsed = Number.parseInt(value, 10);
-          if (Number.isFinite(parsed) && parsed >= 5 && parsed <= 300) {
-            this.plugin.settings.scriptTimeoutSeconds = parsed;
-            await this.plugin.saveSettings();
-          }
-        })
-      );
+      .setDesc("Seconds before a foreground audit is terminated. Range: 5–300.");
+    const timeoutErrorId = `vc-control-timeout-error-${crypto.randomUUID()}`;
+    const timeoutError = timeoutSetting.descEl.createDiv({
+      cls: "vc-control-setting-error",
+      attr: { id: timeoutErrorId, role: "status", "aria-live": "polite" }
+    });
+    timeoutSetting.addText((text) => {
+      text.inputEl.setAttr("aria-describedby", timeoutErrorId);
+      const validate = (value: string): number | null => {
+        const parsed = Number.parseInt(value, 10);
+        const valid = /^\d+$/.test(value.trim()) && Number.isFinite(parsed) && parsed >= 5 && parsed <= 300;
+        setFieldValidation(text.inputEl, timeoutError, valid, "Enter a whole number from 5 through 300.");
+        return valid ? parsed : null;
+      };
+      text.setValue(String(this.plugin.settings.scriptTimeoutSeconds)).onChange(async (value) => {
+        const parsed = validate(value);
+        if (parsed !== null) {
+          this.plugin.settings.scriptTimeoutSeconds = parsed;
+          await this.plugin.saveSettings();
+        }
+      });
+      validate(String(this.plugin.settings.scriptTimeoutSeconds));
+    });
   }
 }
 
@@ -1226,6 +1402,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private readonly pendingProposalModals = new Set<ProposalReviewModal>();
   private readonly pendingCommandSearchModals = new Set<ControlActionSearchModal>();
   private commandSearchRefreshPending = false;
+  private activationPromise: Promise<WorkspaceLeaf> | null = null;
   private entityIndex: readonly EntityIndexEntry[] | null = null;
   private transactionInProgress = false;
   private refreshTimer: number | null = null;
@@ -1254,6 +1431,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
 
     this.registerMarkdownCodeBlockProcessor("vcg-control", (source, element) => {
       this.renderControlBlock(source, element);
+    });
+    this.registerMarkdownCodeBlockProcessor("ad-statblock", async (source, element, context) => {
+      await this.renderAdStatblock(source, element, context.sourcePath);
     });
 
     this.registerMarkdownPostProcessor(() => this.scheduleRefresh(0));
@@ -1298,6 +1478,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         })
       );
       this.scheduleRefresh(0);
+      if (this.settings.startupSurface === "control-plane") void this.activateView();
     });
   }
 
@@ -1366,6 +1547,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         ? saved.activeContextProfile
         : DEFAULT_SETTINGS.activeContextProfile,
       activeRoute: isPrimaryRoute(saved.activeRoute) ? saved.activeRoute : DEFAULT_SETTINGS.activeRoute,
+      startupSurface: normalizeStartupSurface(saved.startupSurface),
       favoriteActionIds: normalizeFavoriteActionIds(saved.favoriteActionIds, actionIds),
       recentActions: normalizeRecentActions(saved.recentActions, ACTION_BY_ID.keys()),
       recentRuns: recentRuns.slice(0, 8).map((run) => ({
@@ -1390,13 +1572,29 @@ export default class VeiledChicagoControlPlane extends Plugin {
   }
 
   async activateView(section?: string): Promise<void> {
+    let leaf: WorkspaceLeaf;
+    if (this.activationPromise) {
+      leaf = await this.activationPromise;
+    } else {
+      const activation = this.activateControlPlaneLeaf();
+      this.activationPromise = activation;
+      try {
+        leaf = await activation;
+      } finally {
+        if (this.activationPromise === activation) this.activationPromise = null;
+      }
+    }
+    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+  }
+
+  private async activateControlPlaneLeaf(): Promise<WorkspaceLeaf> {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) {
       leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
-    if (section && leaf.view instanceof ControlPlaneView) await leaf.view.navigateTo(section);
+    return leaf;
   }
 
   async setActiveRoute(route: PrimaryRoute): Promise<void> {
@@ -1427,7 +1625,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
       this.refreshTimer = null;
       if (this.unloading) return;
       this.applyProfilesToAllLeaves();
-      void this.refreshViews("Control plane state refreshed.");
+      void this.refreshViews();
     }, delay);
   }
 
@@ -1632,6 +1830,32 @@ export default class VeiledChicagoControlPlane extends Plugin {
       });
       alert.createEl("strong", { text: "Invalid vcg-control block" });
       alert.createEl("p", { text: message });
+    }
+  }
+
+  private async renderAdStatblock(source: string, element: HTMLElement, sourcePath: string): Promise<void> {
+    element.empty();
+    element.addClass("vc-ad-statblock-host");
+    const spec = parseAdStatblock(source);
+    const section = element.createEl("section", { cls: "vc-ad-statblock" });
+    const titleId = `vc-ad-statblock-title-${crypto.randomUUID()}`;
+    section.setAttr("aria-labelledby", titleId);
+    const header = section.createEl("header", { cls: "vc-ad-statblock-header" });
+    header.createEl("h3", { text: spec.title, attr: { id: titleId } });
+    header.createSpan({ text: "REFERENCE / NON-EXECUTABLE MARKDOWN" });
+    const body = section.createDiv({ cls: "vc-ad-statblock-body" });
+    const safeMarkdown = sanitizeAdStatblockMarkdown(spec.markdown);
+    if (!safeMarkdown) {
+      body.createEl("p", { cls: "vc-control-empty", text: "No statblock details were supplied." });
+      return;
+    }
+    try {
+      await MarkdownRenderer.render(this.app, safeMarkdown, body, sourcePath, this);
+    } catch (error) {
+      body.empty();
+      const alert = body.createEl("div", { cls: "vc-control-block-error", attr: { role: "alert" } });
+      alert.createEl("strong", { text: "Statblock rendering failed" });
+      alert.createEl("p", { text: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -2148,14 +2372,23 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const active = this.requireActiveSession();
     const intakePath = `${active.roomPath}/${active.displayName} Decision Intake.md`;
     const intake = this.fileAt(intakePath);
-    if (!intake) throw new Error(`Decision Intake is missing: ${intakePath}`);
-    const declarationEvidence = await this.app.vault.cachedRead(intake);
+    const currentState = this.fileAt(CURRENT_STATE_PATH);
+    const [decisionIntakeContents, currentStateContents] = await Promise.all([
+      intake ? this.app.vault.read(intake) : Promise.resolve(null),
+      currentState ? this.app.vault.read(currentState) : Promise.resolve(null)
+    ]);
     const live = await this.readLiveState();
+    const selectionEvidence = collectRunSelectionEvidence({
+      roomPath: active.roomPath,
+      displayName: active.displayName,
+      decisionIntakeContents,
+      currentStateContents
+    });
     this.reviewProposal(
       buildRunProposal({
         roomPath: active.roomPath,
         displayName: active.displayName,
-        declarationEvidence,
+        selectionEvidence,
         latestPlayedLabel: live.latestLabel,
         createdDate: this.today(),
         proposalId: this.proposalId("run")
@@ -2320,6 +2553,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         }
         return { operation, baseline, mode: resolveOperationMode(operation, baseline.kind) };
       }));
+      await this.assertEvidenceSourcesUnchanged(proposal);
       if (this.unloading) throw new Error("The plugin unloaded after transaction preflight.");
       for (const item of plan) {
         if (this.unloading) throw new Error("The plugin unloaded before all reviewed operations completed.");
@@ -2380,6 +2614,17 @@ export default class VeiledChicagoControlPlane extends Plugin {
     } finally {
       this.transactionInProgress = false;
       if (!this.unloading) await this.refreshViews();
+    }
+  }
+
+  private async assertEvidenceSourcesUnchanged(proposal: ReviewedMutationProposal): Promise<void> {
+    for (const baseline of proposal.evidenceBaselines ?? []) {
+      const source = this.app.vault.getAbstractFileByPath(baseline.path);
+      if (!(source instanceof TFile)) throw new Error(`Reviewed evidence source is no longer a file: ${baseline.path}`);
+      const contents = await this.app.vault.read(source);
+      if (!targetMatchesBaseline(baseline, "file", contents, source.stat.mtime, source.stat.size)) {
+        throw new Error(`Evidence source changed after preview: ${baseline.path}`);
+      }
     }
   }
 
@@ -2763,11 +3008,17 @@ export default class VeiledChicagoControlPlane extends Plugin {
     return manager && typeof manager === "object" ? manager : null;
   }
 
-  private commandAvailable(id: string): boolean {
+  commandAvailable(id: string): boolean {
     const manager = this.commandManager();
     if (!manager) return false;
     if (typeof manager.findCommand === "function") return Boolean(manager.findCommand(id));
     return Boolean(manager.commands && Object.prototype.hasOwnProperty.call(manager.commands, id));
+  }
+
+  pluginEnabled(id: string): boolean {
+    const manager = (this.app as App & { plugins?: PluginManagerCompat }).plugins;
+    if (!manager || typeof manager !== "object") return false;
+    return Boolean(manager.enabledPlugins?.has(id) || manager.plugins?.[id]);
   }
 
   private executeCommand(id: string): boolean {

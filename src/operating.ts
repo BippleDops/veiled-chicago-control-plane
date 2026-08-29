@@ -240,6 +240,11 @@ export type MutationOperation =
 
 export type OperationTargetKind = "missing" | "file" | "folder";
 
+export interface ProposalEvidenceSource {
+  path: string;
+  contentHash: string;
+}
+
 export interface MutationProposal {
   id: string;
   title: string;
@@ -247,6 +252,7 @@ export interface MutationProposal {
   phase: "propose";
   canonImpact: "none" | "candidate-only";
   operations: readonly MutationOperation[];
+  evidenceSources?: readonly ProposalEvidenceSource[];
 }
 
 export interface ReviewedTargetBaseline {
@@ -259,6 +265,7 @@ export interface ReviewedTargetBaseline {
 
 export interface ReviewedMutationProposal extends MutationProposal {
   targetBaselines: readonly ReviewedTargetBaseline[];
+  evidenceBaselines?: readonly ReviewedTargetBaseline[];
 }
 
 export interface ManagedNoteInput {
@@ -275,6 +282,38 @@ export interface SessionRoomInput {
   createdDate: string;
   proposalId: string;
 }
+
+export const DM_LIVE_HANDOFF_DEPLOYMENT_MODE = "dm-selected-from-live-handoff" as const;
+
+export interface PlayerDeclarationSelectionEvidence {
+  authority: "player-declaration";
+  sourcePath: string;
+  contents: string;
+}
+
+export interface DmLiveHandoffSelectionEvidence {
+  authority: "dm-selected-from-live-handoff";
+  sourcePath: string;
+  contents: string;
+  deploymentMode: unknown;
+  selectedLead: unknown;
+}
+
+export type RunSelectionEvidence = PlayerDeclarationSelectionEvidence | DmLiveHandoffSelectionEvidence;
+
+export type ResolvedRunSelectionEvidence =
+  | {
+      authority: "player-declaration";
+      sourcePath: string;
+      sourceContentHash: string;
+      declarationId: string;
+    }
+  | {
+      authority: "dm-selected-from-live-handoff";
+      sourcePath: string;
+      sourceContentHash: string;
+      selectedLead: string;
+    };
 
 export interface ControlResult {
   action: string;
@@ -297,6 +336,132 @@ function inlineText(value: string, label: string): string {
   const normalized = value.replace(/\r?\n/g, " ").trim();
   if (/\p{Cc}/u.test(normalized)) throw new Error(`${label} contains unsupported control characters.`);
   return normalized;
+}
+
+type FenceContainerSegment = { kind: "quote" } | { kind: "indent"; columns: number };
+
+interface OpenFence {
+  character: "`" | "~";
+  length: number;
+  containers: readonly FenceContainerSegment[];
+}
+
+function visualColumns(value: string): number {
+  let columns = 0;
+  for (const character of value) columns = character === "\t" ? columns + (4 - (columns % 4)) : columns + 1;
+  return columns;
+}
+
+function consumeExactIndent(value: string, requiredColumns: number): string | null {
+  let columns = 0;
+  let index = 0;
+  while (index < value.length && columns < requiredColumns) {
+    const character = value[index];
+    if (character !== " " && character !== "\t") return null;
+    columns = character === "\t" ? columns + (4 - (columns % 4)) : columns + 1;
+    index += 1;
+  }
+  return columns === requiredColumns ? value.slice(index) : null;
+}
+
+function fenceOpening(line: string): OpenFence | null {
+  let remainder = line;
+  const containers: FenceContainerSegment[] = [];
+  while (true) {
+    const quote = remainder.match(/^ {0,3}>[ \t]?/);
+    if (quote?.[0]) {
+      containers.push({ kind: "quote" });
+      remainder = remainder.slice(quote[0].length);
+      continue;
+    }
+    const list = remainder.match(/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/);
+    if (list?.[0]) {
+      containers.push({ kind: "indent", columns: visualColumns(list[0]) });
+      remainder = remainder.slice(list[0].length);
+      continue;
+    }
+    break;
+  }
+  const opening = remainder.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  const run = opening?.[1];
+  const info = opening?.[2] ?? "";
+  if (!run || (run[0] === "`" && info.includes("`"))) return null;
+  return { character: run[0] as "`" | "~", length: run.length, containers };
+}
+
+function fenceClosingLine(line: string, fence: OpenFence): string | null {
+  let remainder = line;
+  for (const container of fence.containers) {
+    if (container.kind === "quote") {
+      const quote = remainder.match(/^ {0,3}>[ \t]?/);
+      if (!quote?.[0]) return null;
+      remainder = remainder.slice(quote[0].length);
+      continue;
+    }
+    const consumed = consumeExactIndent(remainder, container.columns);
+    if (consumed === null) return null;
+    remainder = consumed;
+  }
+  return remainder;
+}
+
+function declarationMarkerIds(contents: string): string[] {
+  const ids: string[] = [];
+  let fence: OpenFence | null = null;
+  for (const line of contents.split(/\r?\n/)) {
+    if (fence) {
+      const candidate = fenceClosingLine(line, fence);
+      const closing = candidate?.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      const run = closing?.[1];
+      if (run && run[0] === fence.character && run.length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = fenceOpening(line);
+    if (opening) {
+      fence = opening;
+      continue;
+    }
+    const marker = line.match(
+      /^<!--\s*vcg:declaration\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*-->[ \t]*$/
+    );
+    if (marker?.[1]) ids.push(marker[1]);
+  }
+  return ids;
+}
+
+function selectedLeadIdentifier(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("DM live-handoff selection requires selected_lead to be one scalar identifier.");
+  }
+  const selectedLead = value.trim();
+  if (!/^[a-z0-9][a-z0-9._:-]{0,159}$/i.test(selectedLead)) {
+    throw new Error("DM live-handoff selection requires selected_lead to be one safe scalar identifier.");
+  }
+  return selectedLead;
+}
+
+function strictFrontmatterScalar(contents: string, key: string): string | null {
+  const lines = contents.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return null;
+  const closingIndex = lines.slice(1).findIndex((line) => line.trim() === "---");
+  if (closingIndex < 0) return null;
+  const values = lines.slice(1, closingIndex + 1).flatMap((line) => {
+    const separator = line.indexOf(":");
+    if (separator < 0 || line.slice(0, separator).trim() !== key || /^\s/.test(line)) return [];
+    const raw = line.slice(separator + 1).trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(raw)) return [raw];
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        return typeof parsed === "string" ? [parsed] : [];
+      } catch {
+        return [];
+      }
+    }
+    if (raw.startsWith("'") && raw.endsWith("'")) return [raw.slice(1, -1).replaceAll("''", "'")];
+    return [];
+  });
+  return values.length === 1 ? values[0] ?? null : null;
 }
 
 export function normalizeNoteTitle(value: string): string {
@@ -493,6 +658,34 @@ export function validateReviewedProposal(proposal: ReviewedMutationProposal): vo
     }
     resolveOperationMode(operation, baseline.kind);
   });
+  if (proposal.evidenceBaselines !== undefined && !Array.isArray(proposal.evidenceBaselines)) {
+    throw new Error("Reviewed evidence baselines must be an array.");
+  }
+  const evidenceSources = proposal.evidenceSources ?? [];
+  const evidenceBaselines = proposal.evidenceBaselines ?? [];
+  if (evidenceBaselines.length !== evidenceSources.length) {
+    throw new Error("Every proposal evidence source requires exactly one reviewed file baseline.");
+  }
+  evidenceSources.forEach((source, index) => {
+    const baseline = evidenceBaselines[index];
+    if (!baseline || baseline.path !== source.path) {
+      throw new Error(`Reviewed evidence baseline does not match source ${index + 1}.`);
+    }
+    if (
+      baseline.kind !== "file" ||
+      typeof baseline.contentHash !== "string" ||
+      !/^[a-f0-9]{64}$/.test(baseline.contentHash) ||
+      !Number.isFinite(baseline.mtime) ||
+      Number(baseline.mtime) < 0 ||
+      !Number.isFinite(baseline.size) ||
+      Number(baseline.size) < 0
+    ) {
+      throw new Error(`Reviewed evidence source must be an existing valid file: ${source.path}`);
+    }
+    if (baseline.contentHash !== source.contentHash) {
+      throw new Error(`Evidence source changed before review baseline capture: ${source.path}`);
+    }
+  });
 }
 
 export function validateProposal(proposal: MutationProposal): void {
@@ -533,6 +726,25 @@ export function validateProposal(proposal: MutationProposal): void {
     }
     if (operationPaths.has(path)) throw new Error(`Duplicate operation target: ${path}`);
     operationPaths.add(path);
+  }
+  if (proposal.evidenceSources !== undefined && !Array.isArray(proposal.evidenceSources)) {
+    throw new Error("Proposal evidence sources must be an array.");
+  }
+  const evidenceSources = proposal.evidenceSources ?? [];
+  if (evidenceSources.length > 8) throw new Error("A proposal can bind at most 8 evidence sources.");
+  const evidencePaths = new Set<string>();
+  for (const source of evidenceSources) {
+    if (!source || typeof source !== "object" || typeof source.path !== "string") {
+      throw new Error("Proposal contains an invalid evidence source.");
+    }
+    const path = validateManagedWritePath(source.path);
+    if (path !== source.path) throw new Error(`Evidence source path must already be normalized: ${source.path}`);
+    if (typeof source.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(source.contentHash)) {
+      throw new Error(`Evidence source requires a SHA-256 content hash: ${path}`);
+    }
+    if (operationPaths.has(path)) throw new Error(`Evidence source cannot also be a mutation target: ${path}`);
+    if (evidencePaths.has(path)) throw new Error(`Duplicate evidence source: ${path}`);
+    evidencePaths.add(path);
   }
 }
 
@@ -612,21 +824,21 @@ export function buildSessionRoomProposal(input: SessionRoomInput): MutationPropo
       path: `${roomPath}/README.md`,
       contents:
         sessionFrontmatter(`${displayName} Room`, input.createdDate, ["Category/Session-Room"]) +
-        `# ${displayName} Room\n\n> [!important] Authority boundary\n> This is an explicitly selected working room. It does not set \`next_session\`, establish chronology, or promote prep into played fact.\n\n## Operating sequence\n\n1. Record the player declaration verbatim.\n2. Complete preflight and readiness checks.\n3. Generate a draft RUN only after declaration evidence exists.\n4. Capture live events as confirmed, contested, or unknown.\n5. Review candidates before any canonical owner changes.\n`
+        `# ${displayName} Room\n\n> [!important] Authority boundary\n> This is an explicitly selected working room. It does not set \`next_session\`, establish chronology, or promote prep into played fact.\n\n## Operating sequence\n\n1. Establish exactly one supported selection authority: a verbatim player declaration or an explicit DM selection from the live handoff.\n2. Complete preflight and readiness checks.\n3. Generate a draft RUN only after the selection evidence validates.\n4. Capture live events as confirmed, contested, or unknown.\n5. Review candidates before any canonical owner changes.\n`
     },
     {
       kind: "create",
       path: file("Control Room"),
       contents:
         sessionFrontmatter(`${displayName} Control Room`, input.createdDate, ["Category/Session-Control"]) +
-        `# ${displayName} Control Room\n\n\`\`\`vcg-control\ntitle: Session operations\nsubtitle: Explicit, review-gated workflow actions\nactions: capture-player-declaration, open-session-preflight, generate-session-run, open-session-readiness, capture-live-event, open-promotion-review\ncompact: false\n\`\`\`\n\n## Current focus\n\n- **Player declaration:** not recorded\n- **RUN:** blocked until declaration evidence exists\n- **Canon promotion:** human review only\n`
+        `# ${displayName} Control Room\n\n\`\`\`vcg-control\ntitle: Session operations\nsubtitle: Explicit, review-gated workflow actions\nactions: capture-player-declaration, open-session-preflight, generate-session-run, open-session-readiness, capture-live-event, open-promotion-review\ncompact: false\n\`\`\`\n\n## Current focus\n\n- **Selection evidence:** not validated\n- **Supported authorities:** verbatim player declaration or DM-selected live handoff\n- **RUN:** blocked until exactly one supported authority validates\n- **Canon promotion:** human review only\n`
     },
     {
       kind: "create",
       path: file("Decision Intake"),
       contents:
         sessionFrontmatter(`${displayName} Decision Intake`, input.createdDate, ["Category/Decision-Intake"]) +
-        `# ${displayName} Decision Intake\n\n> Player wording is append-only evidence. Corrections add a new entry; they do not replace the original.\n\n## Declarations\n\n_No declaration recorded._\n`
+        `# ${displayName} Decision Intake\n\n> Player wording is append-only evidence. Corrections add a new entry; they do not replace the original. A DM-selected live-handoff authority remains in Current State and is never copied here as player intent.\n\n## Declarations\n\n_No declaration recorded._\n`
     },
     {
       kind: "create",
@@ -647,7 +859,7 @@ export function buildSessionRoomProposal(input: SessionRoomInput): MutationPropo
       path: file("Readiness Board"),
       contents:
         sessionFrontmatter(`${displayName} Readiness Board`, input.createdDate, ["Category/Session-Readiness"]) +
-        `# ${displayName} Readiness Board\n\n- [ ] Verbatim declaration evidence exists\n- [ ] Preflight is complete\n- [ ] Draft RUN cites the declaration and current-state sources\n- [ ] Map / fallback contract is ready\n- [ ] Player-facing surfaces pass the audience gate\n- [ ] Recording consent and retention are documented\n- [ ] No unresolved blocker remains hidden\n`
+        `# ${displayName} Readiness Board\n\n- [ ] Exactly one supported selection-evidence authority exists\n- [ ] Player path has a verbatim declaration marker, or DM path has the exact Current State deployment mode and selected lead\n- [ ] Preflight is complete\n- [ ] Draft RUN cites its selection authority and current-state sources\n- [ ] Map / fallback contract is ready\n- [ ] Player-facing surfaces pass the audience gate\n- [ ] Recording consent and retention are documented\n- [ ] No unresolved blocker remains hidden\n`
     },
     {
       kind: "create",
@@ -804,32 +1016,181 @@ export function buildTranscriptionRequestProposal(input: {
   return proposal;
 }
 
+export function collectRunSelectionEvidence(input: {
+  roomPath: string;
+  displayName: string;
+  decisionIntakeContents: string | null;
+  currentStateContents: string | null;
+}): RunSelectionEvidence[] {
+  const roomPath = normalizeSessionRoomPath(input.roomPath);
+  const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
+  const candidates: RunSelectionEvidence[] = [];
+  if (input.decisionIntakeContents && declarationMarkerIds(input.decisionIntakeContents).length > 0) {
+    candidates.push({
+      authority: "player-declaration",
+      sourcePath: `${roomPath}/${displayName} Decision Intake.md`,
+      contents: input.decisionIntakeContents
+    });
+  }
+  const deploymentMode = input.currentStateContents
+    ? strictFrontmatterScalar(input.currentStateContents, "deployment_mode")
+    : null;
+  const selectedLead = input.currentStateContents
+    ? strictFrontmatterScalar(input.currentStateContents, "selected_lead")
+    : null;
+  if (input.currentStateContents !== null && deploymentMode === DM_LIVE_HANDOFF_DEPLOYMENT_MODE) {
+    candidates.push({
+      authority: "dm-selected-from-live-handoff",
+      sourcePath: VAULT_PATHS.currentState,
+      contents: input.currentStateContents,
+      deploymentMode,
+      selectedLead
+    });
+  }
+  return candidates;
+}
+
+export function resolveRunSelectionEvidence(input: {
+  roomPath: string;
+  displayName: string;
+  selectionEvidence?: readonly RunSelectionEvidence[];
+  declarationEvidence?: string;
+}): ResolvedRunSelectionEvidence {
+  const roomPath = normalizeSessionRoomPath(input.roomPath);
+  const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
+  const legacyEvidenceSupplied = input.declarationEvidence !== undefined;
+  if (input.selectionEvidence !== undefined && legacyEvidenceSupplied) {
+    throw new Error("RUN generation is blocked because multiple selection-evidence inputs were supplied.");
+  }
+  const candidates: readonly RunSelectionEvidence[] =
+    input.selectionEvidence ??
+    (legacyEvidenceSupplied
+      ? [
+          {
+            authority: "player-declaration",
+            sourcePath: `${roomPath}/${displayName} Decision Intake.md`,
+            contents: input.declarationEvidence ?? ""
+          }
+        ]
+      : []);
+  if (candidates.length === 0) {
+    throw new Error("RUN generation is blocked until exactly one explicit selection-evidence authority exists.");
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      "RUN generation is blocked because multiple selection-evidence authorities are present; resolve the authority first."
+    );
+  }
+
+  const candidate = candidates[0];
+  if (!candidate) throw new Error("RUN generation is blocked because selection evidence could not be resolved.");
+  if (candidate.authority !== "player-declaration" && candidate.authority !== "dm-selected-from-live-handoff") {
+    throw new Error("RUN generation is blocked because selection evidence has an unknown authority.");
+  }
+  const sourcePath = normalizeVaultPath(candidate.sourcePath);
+  if (sourcePath !== candidate.sourcePath) {
+    throw new Error("Selection-evidence source paths must already be normalized vault-relative paths.");
+  }
+  if (candidate.authority === "player-declaration") {
+    const expectedPath = `${roomPath}/${displayName} Decision Intake.md`;
+    if (sourcePath !== expectedPath) {
+      throw new Error(`Player-declaration evidence must come from the active room Decision Intake: ${expectedPath}`);
+    }
+    const declarationIds = declarationMarkerIds(candidate.contents);
+    const declarationId = declarationIds.at(-1);
+    if (!declarationId) {
+      if (legacyEvidenceSupplied) {
+        throw new Error("RUN generation is blocked until declaration evidence exists in Decision Intake.");
+      }
+      throw new Error("Player-declaration selection evidence requires an exact standalone vcg:declaration marker.");
+    }
+    return {
+      authority: candidate.authority,
+      sourcePath,
+      sourceContentHash: contentHash(candidate.contents),
+      declarationId
+    };
+  }
+
+  if (sourcePath !== VAULT_PATHS.currentState) {
+    throw new Error(`DM live-handoff selection evidence must come from ${VAULT_PATHS.currentState}.`);
+  }
+  if (
+    typeof candidate.deploymentMode !== "string" ||
+    candidate.deploymentMode.trim() !== DM_LIVE_HANDOFF_DEPLOYMENT_MODE
+  ) {
+    throw new Error(
+      `DM live-handoff selection requires deployment_mode: ${DM_LIVE_HANDOFF_DEPLOYMENT_MODE}.`
+    );
+  }
+  if (!candidate.contents.trim()) {
+    throw new Error("DM live-handoff selection requires the Current State source contents.");
+  }
+  const selectedLead = selectedLeadIdentifier(candidate.selectedLead);
+  const sourceDeploymentMode = strictFrontmatterScalar(candidate.contents, "deployment_mode");
+  const sourceSelectedLead = strictFrontmatterScalar(candidate.contents, "selected_lead");
+  if (sourceDeploymentMode !== candidate.deploymentMode || sourceSelectedLead !== selectedLead) {
+    throw new Error("DM live-handoff selection fields must match the same Current State source snapshot.");
+  }
+  return {
+    authority: candidate.authority,
+    sourcePath,
+    sourceContentHash: contentHash(candidate.contents),
+    selectedLead
+  };
+}
+
+function runSelectionEvidenceMarkdown(evidence: ResolvedRunSelectionEvidence): string {
+  if (evidence.authority === "player-declaration") {
+    return (
+      `- **Selection authority:** verbatim player declaration\n` +
+      `- **Evidence source:** [[${evidence.sourcePath}]]\n` +
+      `- **Evidence snapshot:** SHA-256 \`${evidence.sourceContentHash}\`\n` +
+      `- **Evidence marker:** \`vcg:declaration ${evidence.declarationId}\`\n` +
+      `- **Player wording:** copy the reviewed verbatim statement here\n` +
+      `- **Selected lead:** do not infer; derive only from the reviewed declaration\n`
+    );
+  }
+  return (
+    `- **Selection authority:** DM selection from live handoff\n` +
+    `- **Evidence source:** [[${evidence.sourcePath}]]\n` +
+    `- **Evidence snapshot:** SHA-256 \`${evidence.sourceContentHash}\`\n` +
+    `- **Deployment mode:** \`${DM_LIVE_HANDOFF_DEPLOYMENT_MODE}\`\n` +
+    `- **Selected lead:** \`${evidence.selectedLead}\`\n` +
+    `- **Player wording:** not asserted; this authority does not claim or fabricate player intent\n`
+  );
+}
+
 export function buildRunProposal(input: {
   roomPath: string;
   displayName: string;
-  declarationEvidence: string;
+  selectionEvidence?: readonly RunSelectionEvidence[];
+  declarationEvidence?: string;
   latestPlayedLabel: string;
   createdDate: string;
   proposalId: string;
 }): MutationProposal {
   const roomPath = normalizeSessionRoomPath(input.roomPath);
   const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
-  const evidence = input.declarationEvidence.trim();
-  if (!evidence.includes("vcg:declaration")) {
-    throw new Error("RUN generation is blocked until declaration evidence exists in Decision Intake.");
-  }
+  const selectionEvidence = resolveRunSelectionEvidence({
+    roomPath,
+    displayName,
+    selectionEvidence: input.selectionEvidence,
+    declarationEvidence: input.declarationEvidence
+  });
   const title = `${displayName} RUN`;
   const path = `${roomPath}/${title}.md`;
   const contents =
     sessionFrontmatter(title, input.createdDate, ["Category/Session-Prep"]) +
-    `# ${title}\n\n> [!important] Conditional prep only\n> Generated only after an explicit declaration was recorded. This remains draft/future and cannot prove that anything happened.\n\n## Declaration and evidence\n\n- **Latest played record:** ${inlineText(input.latestPlayedLabel, "Latest played label")}\n- **Decision intake:** [[${roomPath}/${displayName} Decision Intake]]\n- **Player wording:** copy the reviewed verbatim statement here\n- **Current-state facts used:** <!-- add citations -->\n- **Exact gaps and safe fallbacks:** <!-- document gaps -->\n- **Source modules opened for parts:** <!-- list source modules -->\n- **Source claims explicitly excluded:** <!-- list exclusions -->\n\n## Player-facing choice set\n\n| Perceivable choice | Available modes | What may change |\n| --- | --- | --- |\n|  |  |  |\n\n## Activated toy register\n\n| ID | Perceivable evidence | Want / move | 3+ affordances | If ignored | Evidence boundary |\n| --- | --- | --- | --- | --- | --- |\n| T-01 |  |  |  |  |  |\n\n## Information resilience\n\n| Information | Witness | Object / record | Environment / consequence | Survives a missing NPC? |\n| --- | --- | --- | --- | --- |\n|  |  |  |  |  |\n\n## Map and fallback contract\n\n- **Primary map:** <!-- add map -->\n- **Abstract-zone fallback:** <!-- add fallback -->\n- **Player-safe reveal state:** <!-- add reveal state -->\n- **Unexpected approach:** <!-- add contingency -->\n\n## Outcome bands\n\n| Outcome | State change candidate | Continuing choices |\n| --- | --- | --- |\n| Success |  |  |\n| Costly / partial |  |  |\n| Refusal / departure |  |  |\n`;
+    `# ${title}\n\n> [!important] Conditional prep only\n> Generated only after exactly one explicit selection-evidence authority validated. This remains draft/future, cannot prove that anything happened, and cannot convert a DM selection into player intent.\n\n## Selection authority and evidence\n\n- **Latest played record:** ${inlineText(input.latestPlayedLabel, "Latest played label")}\n${runSelectionEvidenceMarkdown(selectionEvidence)}- **Current-state facts used:** <!-- add citations -->\n- **Exact gaps and safe fallbacks:** <!-- document gaps -->\n- **Source modules opened for parts:** <!-- list source modules -->\n- **Source claims explicitly excluded:** <!-- list exclusions -->\n\n## Player-facing choice set\n\n| Perceivable choice | Available modes | What may change |\n| --- | --- | --- |\n|  |  |  |\n\n## Activated toy register\n\n| ID | Perceivable evidence | Want / move | 3+ affordances | If ignored | Evidence boundary |\n| --- | --- | --- | --- | --- | --- |\n| T-01 |  |  |  |  |  |\n\n## Information resilience\n\n| Information | Witness | Object / record | Environment / consequence | Survives a missing NPC? |\n| --- | --- | --- | --- | --- |\n|  |  |  |  |  |\n\n## Map and fallback contract\n\n- **Primary map:** <!-- add map -->\n- **Abstract-zone fallback:** <!-- add fallback -->\n- **Player-safe reveal state:** <!-- add reveal state -->\n- **Unexpected approach:** <!-- add contingency -->\n\n## Outcome bands\n\n| Outcome | State change candidate | Continuing choices |\n| --- | --- | --- |\n| Success |  |  |\n| Costly / partial |  |  |\n| Refusal / departure |  |  |\n`;
   const proposal: MutationProposal = {
     id: input.proposalId,
     title: `Generate draft ${title}`,
-    summary: `Create one declaration-gated draft RUN at ${path}.`,
+    summary: `Create one explicit-selection-gated draft RUN at ${path}.`,
     phase: "propose",
     canonImpact: "candidate-only",
-    operations: [{ kind: "create", path, contents }]
+    operations: [{ kind: "create", path, contents }],
+    evidenceSources: [{ path: selectionEvidence.sourcePath, contentHash: selectionEvidence.sourceContentHash }]
   };
   validateProposal(proposal);
   return proposal;
