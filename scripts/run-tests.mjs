@@ -6,7 +6,8 @@ const testEntries = [
   "tests/operating.test.ts",
   "tests/navigation.test.ts",
   "tests/entity-navigator.test.ts",
-  "tests/ui-contract.test.ts"
+  "tests/ui-contract.test.ts",
+  "tests/style-contract.test.ts"
 ];
 
 for (const entryPoint of testEntries) {

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 const requiredAssets = ["manifest.json", "main.js", "styles.css"];
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 const versions = JSON.parse(readFileSync("versions.json", "utf8"));
 const featureContract = JSON.parse(readFileSync("feature-contract.json", "utf8"));
 const errors = [];
@@ -16,6 +17,8 @@ function requireEqual(label, actual, expected) {
 
 requireEqual("manifest.id", manifest.id, "veiled-chicago-control-plane");
 requireEqual("package version", packageJson.version, manifest.version);
+requireEqual("package-lock version", packageLock.version, manifest.version);
+requireEqual("package-lock root version", packageLock.packages?.[""]?.version, manifest.version);
 requireEqual("versions mapping", versions[manifest.version], manifest.minAppVersion);
 
 if (!/^\d+\.\d+\.\d+$/.test(manifest.version ?? "")) {

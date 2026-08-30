@@ -2,6 +2,8 @@
 
 A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, a first-party startup surface, safe Markdown compatibility renderers, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
 
+Version 1.3.1 is an accessibility and presentation patch: the skip link is focus-only, observed-context metrics retain their intended width, and one late progressive-enhancement layer now owns all supported glass surfaces without weakening opaque or reduced-transparency fallbacks.
+
 ## Install with BRAT
 
 1. Install and enable [BRAT](https://github.com/TfTHacker/obsidian42-brat).

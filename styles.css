@@ -149,23 +149,6 @@
   content: "";
 }
 
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .vc-control-hero,
-  .vc-control-toolbar,
-  .vc-control-section,
-  .vc-control-router,
-  .vc-control-policy,
-  .vc-control-health,
-  .vc-control-transactions,
-  .vc-control-runs,
-  .vc-control-block,
-  .vc-ad-statblock {
-    background: var(--vccp-glass);
-    backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
-    -webkit-backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
-  }
-}
-
 .vc-control-eyebrow,
 .vc-control-section-heading > span,
 .vc-control-action-state,
@@ -1214,24 +1197,6 @@
   }
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .vc-control-hero,
-  .vc-control-toolbar,
-  .vc-control-section,
-  .vc-control-router,
-  .vc-control-policy,
-  .vc-control-health,
-  .vc-control-transactions,
-  .vc-control-runs,
-  .vc-control-block,
-  .vc-ad-statblock,
-  .vc-ad-statblock-header {
-    background: var(--vccp-surface);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
 @media (prefers-contrast: more) {
   .vc-control-hero,
   .vc-control-toolbar,
@@ -1349,8 +1314,26 @@
   z-index: var(--layer-popover, 30);
   inset-block-start: 0.5rem;
   inset-inline-start: 0.5rem;
-  transform: translateY(calc(-100% - 1rem));
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.vc-control-skip-link:focus,
+.vc-control-skip-link:focus-visible {
+  inline-size: auto;
+  block-size: auto;
   min-height: 2.5rem;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
   border: 2px solid var(--vccp-focus);
   border-radius: calc(var(--vccp-radius) * 0.7);
   padding: 0.55rem 0.8rem;
@@ -1358,12 +1341,7 @@
   background: var(--vccp-surface-strong);
   box-shadow: 0 0.65rem 1.6rem var(--vccp-shadow);
   font-weight: 700;
-  transition: transform 120ms ease;
-}
-
-.vc-control-skip-link:focus,
-.vc-control-skip-link:focus-visible {
-  transform: translateY(0);
+  white-space: normal;
 }
 
 .vc-control-app-header {
@@ -1381,18 +1359,6 @@
   padding: 0.75rem;
   background: var(--vccp-surface);
   box-shadow: 0 0.65rem 1.6rem var(--vccp-shadow);
-}
-
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .vc-control-app-header,
-  .vc-control-route-nav,
-  .vc-control-context,
-  .vc-control-bottom-nav,
-  .vc-control-more-panel {
-    background: var(--vccp-glass);
-    backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
-    -webkit-backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
-  }
 }
 
 .vc-control-brand {
@@ -1675,9 +1641,16 @@
 
 .vc-control-context-section dl {
   display: grid;
-  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
-  gap: 0.35rem 0.55rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.35rem;
   margin: 0;
+}
+
+.vc-control-context-section .vc-control-metric {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  gap: 0.55rem;
+  min-width: 0;
 }
 
 .vc-control-context-section dt {
@@ -2224,7 +2197,7 @@
     white-space: normal;
   }
 
-  .vc-control-context-section dl {
+  .vc-control-context-section .vc-control-metric {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2262,6 +2235,33 @@
   .vc-control-bottom-nav button {
     min-height: 3rem;
     font-size: 0.65rem;
+  }
+}
+
+/* Progressive glass enhancement follows every opaque surface baseline so the
+ * fallback remains readable while capable clients receive the intended layer. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vc-control-hero,
+  .vc-control-toolbar,
+  .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
+  .vc-control-runs,
+  .vc-control-block,
+  .vc-ad-statblock,
+  .vc-control-app-header,
+  .vc-control-route-nav,
+  .vc-control-context,
+  .vc-control-bottom-nav,
+  .vc-control-more-panel,
+  .vc-control-favorites,
+  .vc-control-recents,
+  .vc-control-entity-toolbar {
+    background: var(--vccp-glass);
+    backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
+    -webkit-backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
   }
 }
 
@@ -2303,6 +2303,17 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
+  .vc-control-hero,
+  .vc-control-toolbar,
+  .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
+  .vc-control-runs,
+  .vc-control-block,
+  .vc-ad-statblock,
+  .vc-ad-statblock-header,
   .vc-control-app-header,
   .vc-control-route-nav,
   .vc-control-context,
@@ -2344,6 +2355,15 @@
 
 @media (forced-colors: active) {
   .vc-control-shell,
+  .vc-control-hero,
+  .vc-control-toolbar,
+  .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
+  .vc-control-runs,
+  .vc-control-block,
   .vc-control-app-header,
   .vc-control-command-trigger,
   .vc-control-route-nav,
@@ -2440,6 +2460,15 @@
   }
 
   .vc-control-route-main,
+  .vc-control-hero,
+  .vc-control-toolbar,
+  .vc-control-section,
+  .vc-control-router,
+  .vc-control-policy,
+  .vc-control-health,
+  .vc-control-transactions,
+  .vc-control-runs,
+  .vc-control-block,
   .vc-control-favorites,
   .vc-control-recents,
   .vc-control-entity-toolbar,
@@ -2455,6 +2484,8 @@
     background: #ffffff;
     border-color: #555555;
     box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     break-inside: avoid;
   }
 

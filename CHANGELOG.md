@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 - 2026-08-30
+
+- Hide the in-app skip link with the standard visually-hidden pattern until it receives keyboard focus.
+- Repair the observed-context live-truth metric grid so metric wrappers cannot collapse the value column.
+- Consolidate glass enhancement into one late cascade layer while preserving opaque fallbacks and reduced-transparency overrides.
+- Add source-level style contracts for skip-link visibility, metric layout, glass ownership, and preference ordering.
+
 ## 1.3.0 - 2026-08-29
 
 - Add a validated first-party startup surface that reuses an existing Control Plane leaf or opens one tab through a concurrency guard.
