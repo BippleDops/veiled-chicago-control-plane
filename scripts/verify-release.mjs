@@ -137,6 +137,8 @@ for (const feature of contractFeatures) {
 }
 
 const mainSource = readFileSync("src/main.ts", "utf8");
+const mainBundle = readFileSync("main.js", "utf8");
+const companionSource = readFileSync("companion/vcg_control.py", "utf8");
 const operatingSource = readFileSync("src/operating.ts", "utf8");
 const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
 const stylesSource = readFileSync("styles.css", "utf8");
@@ -203,6 +205,19 @@ for (const retiredCompatSelector of ['data-type^="custom-frames-"', 'data-type="
 }
 if (!mainSource.includes("INTERFACE_CAPABILITIES") || !capabilitiesSource.includes("omnisearch:show-modal")) {
   errors.push("1.3 sources are missing the fixed local capability registry");
+}
+if (
+  !mainSource.includes('env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }') ||
+  !mainBundle.includes("PYTHONDONTWRITEBYTECODE")
+) {
+  errors.push("plugin source or distributable does not enforce no-bytecode mode for the Python wrapper");
+}
+if (
+  !companionSource.includes("environment = os.environ.copy()") ||
+  !companionSource.includes('environment["PYTHONDONTWRITEBYTECODE"] = "1"') ||
+  !companionSource.includes("env=_python_child_environment()")
+) {
+  errors.push("companion wrapper does not preserve the parent environment and enforce no-bytecode mode");
 }
 if (stylesSource.includes("@media (max-width:")) {
   errors.push("styles.css uses viewport width for leaf-dependent reflow; use the control-plane container");

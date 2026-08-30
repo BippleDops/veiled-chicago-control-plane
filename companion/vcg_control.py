@@ -47,6 +47,13 @@ MAP_PORT = 5173
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024
 
 
+def _python_child_environment() -> dict[str, str]:
+    """Preserve the caller environment while preventing vault bytecode residue."""
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment
+
+
 @dataclass(frozen=True)
 class Result:
     action: str
@@ -512,6 +519,7 @@ def run_command(action_id: str, action: CommandAction, timeout_cap: int | None =
         process = subprocess.Popen(  # noqa: S603 - argv comes from COMMAND_ACTIONS only
             action.argv,
             cwd=ROOT,
+            env=_python_child_environment(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

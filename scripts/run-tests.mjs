@@ -7,7 +7,8 @@ const testEntries = [
   "tests/navigation.test.ts",
   "tests/entity-navigator.test.ts",
   "tests/ui-contract.test.ts",
-  "tests/style-contract.test.ts"
+  "tests/style-contract.test.ts",
+  "tests/process-env.test.ts"
 ];
 
 for (const entryPoint of testEntries) {

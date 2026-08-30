@@ -5177,6 +5177,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         ],
         {
           cwd: root,
+          env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
           timeout: this.settings.scriptTimeoutSeconds * 1e3,
           maxBuffer: 2 * 1024 * 1024,
           encoding: "utf8"

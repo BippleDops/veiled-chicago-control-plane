@@ -2788,6 +2788,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         ],
         {
           cwd: root,
+          env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
           timeout: this.settings.scriptTimeoutSeconds * 1000,
           maxBuffer: 2 * 1024 * 1024,
           encoding: "utf8"

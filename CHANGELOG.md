@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2 - 2026-08-30
+
+- Preserve the parent process environment while enforcing `PYTHONDONTWRITEBYTECODE=1` at both Python launch boundaries.
+- Add executable and source/distributable regressions for inherited environment variables and no-bytecode enforcement.
+
 ## 1.3.1 - 2026-08-30
 
 - Hide the in-app skip link with the standard visually-hidden pattern until it receives keyboard focus.
