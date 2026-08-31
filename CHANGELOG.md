@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1 - 2026-08-31
+
+- Preserve all 56 action IDs while moving the map, 5eTools, and Kobold+ adapters from Custom Frames commands to Obsidian's core Web Viewer.
+- Reuse and reveal an existing `webviewer` leaf with the same canonical URL, or open one tab with first-party `{ url, navigate: true }` input when no match exists; validate type immediately and boundedly await the asynchronous persisted URL.
+- Keep the local map credential-free and loopback-only; bind 5eTools and Kobold+ to two fixed HTTPS allowlist entries and fail closed before leaf creation on any URL drift.
+- Single-flight same-URL activation prevents duplicate tabs; type rejection, URL timeout, and plugin unload detach only the newly created leaf.
+- Remove Custom Frames from the current interface-capability contract without weakening the navigation-only Markdown source policy.
+
 ## 1.4.0 - 2026-08-30
 
 - Wire native command-search suggestions to the complete query-aware ranking model while preserving favorite and recent boosts.

@@ -2,7 +2,7 @@
 
 A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, a first-party startup surface, safe Markdown compatibility renderers, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
 
-Version 1.4.0 hardens the operating surface without adding action IDs: command search now applies its full query ranking, Markdown controls have a typed navigation-only source policy and bounded parser, active rooms are selected from existing direct-child folders, and RUN proposals bind a complete Current State plus selection-evidence snapshot. Version 1.3.2 remains the no-bytecode process-boundary patch.
+Version 1.4.1 removes the three Custom Frames command dependencies without changing action IDs: the map, 5eTools, and Kobold+ routes now reuse an existing matching Obsidian core Web Viewer leaf or open one validated tab. Version 1.4.0 remains the query, source-policy, native-session-selection, and complete RUN-evidence hardening release.
 
 ## Install with BRAT
 
@@ -39,12 +39,14 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 - Renders bounded, allowlisted `vcg-control` Markdown blocks under a typed navigation-only source policy; note content cannot expose workflows, Obsidian commands, integrations, external URLs, recording, processes, scripts, paths, arguments, or shell fragments.
 - Renders legacy `ad-statblock` blocks as labelled, non-executable Markdown after neutralizing HTML, embeds, executable code-block processors, Dataview expressions, and Meta Bind directives.
 - Applies workflow profiles (`vcg-dashboard`, `vcg-session`, `vcg-dossier`, `vcg-data-deck`, `vcg-map-room`, and `vcg-handout`) from the active note's path and frontmatter without editing the note.
-- Integrates through compiled command IDs with Omnisearch, Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, Custom Frames, and Lean Terminal when those capabilities are present. The Omnisearch adapter is fixed to the verified `omnisearch:show-modal` command and does not manage its index or HTTP settings.
+- Integrates through compiled command IDs with Omnisearch, Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, and Lean Terminal when those capabilities are present. Map and web-reference routes use Obsidian's core Web Viewer directly; the Omnisearch adapter remains fixed to the verified `omnisearch:show-modal` command and does not manage its index or HTTP settings.
 - Shows a fixed interface-capability registry on System with owners, local availability, and explicit replacement boundaries; discovered command IDs are diagnostic only and are never executed.
 - Opens native Sessions, NPC, Location, and Operational Review Queue Bases through fixed vault paths.
 - Exposes navigation through the `obsidian://vc-control?action=<allowlisted-id>` protocol.
 
 The dashboard resolves campaign state from `1-Campaign/DM/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is absent, null, malformed, or not a positive integer.
+
+The three stable web-route actions are `open-veiled-map`, `open-5etools`, and `open-kobold-club`. The local map accepts only the configured credential-free `http://127.0.0.1`, `http://localhost`, or `http://[::1]` URL. 5eTools and Kobold+ use the fixed HTTPS allowlist in [`src/web-viewer.ts`](src/web-viewer.ts). An existing `webviewer` leaf with the same canonical URL is revealed; otherwise the plugin opens one new tab using the first-party navigation input `{ url, navigate: true }`. It validates the view type immediately and then boundedly waits for Web Viewer to persist the canonical URL because `mode` belongs to Web Viewer's output state. Unknown actions, changed fixed targets, credentials, non-HTTP(S) schemes, remote map hosts, malformed URLs, asynchronous state drift, timeouts, and plugin unload fail closed; a newly created rejected or canceled leaf is detached.
 
 The active session room is a separate, explicit plugin-local selection. The native chooser lists only existing direct children of `1-Campaign/Sessions`, and the selected folder is revalidated before it is committed, displayed, or used by a workflow. Selecting it never writes Current State, chooses a lead, establishes chronology, or promotes a draft. The room name must match the selected folder basename so workflow filenames cannot escape the room.
 

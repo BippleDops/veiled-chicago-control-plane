@@ -23,6 +23,7 @@ for (const id of [
   "check-map-server",
   "start-map-server",
   "open-5etools",
+  "open-kobold-club",
   "open-veiled-map",
   "open-terminal",
   "start-audio-recorder",

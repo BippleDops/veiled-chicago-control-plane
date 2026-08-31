@@ -58,6 +58,19 @@ Exactly one authority is permitted. The proposal remains draft/future and human-
 - Route display titles are compact, and running actions use a quiet two-pixel signal datum plus authored state text instead of a decorative hazard field.
 - Reduced-transparency, forced-colors, and print fallbacks continue to remove backdrop work.
 
+## 1.4.1 core Web Viewer migration
+
+Patch 1.4.1 preserves all 56 action IDs and removes the Custom Frames dependency from `open-veiled-map`, `open-5etools`, and `open-kobold-club`.
+
+- The map route resolves only the existing credential-free loopback `mapUrl` contract.
+- 5eTools resolves only `https://5e.tools/`; Kobold+ resolves only `https://koboldplus.club/`.
+- A matching existing `webviewer` leaf is revealed by canonical URL. Otherwise one new tab receives the first-party input `{ type: "webviewer", state: { url, navigate: true } }`; `mode` is treated only as Web Viewer output state.
+- The view type is checked immediately after `setViewState`, then the canonical persisted URL is polled for at most two seconds before reveal. This accommodates Web Viewer's asynchronous state commit without accepting a changed URL.
+- Invalid, changed, credential-bearing, non-HTTP(S), or non-loopback map URLs fail before leaf creation. Type rejection, URL drift, timeout, or plugin unload detaches a newly created leaf and reports a failed action. The controller checks unload state before creation and after every awaited set, poll, and reveal boundary.
+- Same-URL concurrent requests share one activation promise, while a previously committed matching leaf is revealed instead of duplicated.
+- All three routes remain integrations, remain available only through their compiled first-party/command/protocol sources, and remain forbidden in Markdown control blocks.
+- The interface-capability registry now names Obsidian Web Viewer as the built-in owner; Custom Frames is no longer required.
+
 ## Acceptance
 
-`npm run verify` must prove strict type checking, source-policy/parser limits, query wiring, session-folder guards, RUN evidence ambiguity failures, distributable rebuild, version alignment, and the unchanged 56-action registry.
+`npm run verify` must prove strict type checking, source-policy/parser limits, query wiring, session-folder guards, RUN evidence ambiguity failures, fixed Web Viewer URL and singleton-leaf contracts, distributable rebuild, version alignment, and the unchanged 56-action registry.

@@ -63,7 +63,8 @@ for (const file of [
   "src/operating.ts",
   "src/paths.ts",
   "src/ui-contract.ts",
-  "src/capabilities.ts"
+  "src/capabilities.ts",
+  "src/web-viewer.ts"
 ]) {
   const contents = readFileSync(file, "utf8");
   for (const root of removedVaultRoots) {
@@ -146,6 +147,7 @@ const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
 const stylesSource = readFileSync("styles.css", "utf8");
 const uiContractSource = readFileSync("src/ui-contract.ts", "utf8");
 const capabilitiesSource = readFileSync("src/capabilities.ts", "utf8");
+const webViewerSource = readFileSync("src/web-viewer.ts", "utf8");
 if (mainSource.includes("findLatestPlayedFallback")) errors.push("src/main.ts retains forbidden latest-played filename inference");
 if (!mainSource.includes("transactionInProgress")) errors.push("src/main.ts is missing the transaction mutex");
 if (!mainSource.includes("targetMatchesBaseline") || !mainSource.includes("contentHash(current)")) {
@@ -206,6 +208,41 @@ if (
 }
 if (!actionSource.match(/id: "open-omnisearch"[\s\S]*?target: "omnisearch:show-modal"/)) {
   errors.push("open-omnisearch must remain bound to the verified fixed Omnisearch command");
+}
+if (
+  !webViewerSource.includes('"open-5etools": "https://5e.tools/"') ||
+  !webViewerSource.includes('"open-kobold-club": "https://koboldplus.club/"') ||
+  !webViewerSource.includes('actionId === "open-veiled-map"') ||
+  !webViewerSource.includes("isSafeMapUrl(mapUrl)") ||
+  !webViewerSource.includes("class CoreWebViewerController") ||
+  !webViewerSource.includes("state: { url, navigate: true }") ||
+  !webViewerSource.includes("waitForCanonicalWebViewerUrl") ||
+  !webViewerSource.includes("this.workspace.isCancelled()") ||
+  !webViewerSource.includes("this.workspace.detachLeaf(leaf)") ||
+  !mainSource.includes("new CoreWebViewerController<WorkspaceLeaf>") ||
+  !mainSource.includes('this.app.workspace.getLeaf("tab")') ||
+  !mainSource.includes("isCancelled: () => this.unloading") ||
+  !mainSource.includes("if (this.unloading || !this.webViewerController)")
+) {
+  errors.push("1.4.1 sources are missing fixed core Web Viewer URL, async commit, reuse, unload, or fail-closed leaf contracts");
+}
+if (/state:\s*\{\s*url,\s*mode:/.test(webViewerSource)) {
+  errors.push("1.4.1 must use Web Viewer navigate input rather than its output-only mode state");
+}
+for (const file of ["src/actions.ts", "src/capabilities.ts", "src/main.ts", "main.js"]) {
+  const contents = readFileSync(file, "utf8");
+  if (/obsidian-custom-frames|Custom Frames|Custom Frame/.test(contents)) {
+    errors.push(`${file} retains a current Custom Frames dependency`);
+  }
+}
+if (readFileSync("README.md", "utf8").includes("obsidian-custom-frames")) {
+  errors.push("README.md retains the retired Custom Frames plugin ID");
+}
+for (const webViewerAction of ["open-veiled-map", "open-5etools", "open-kobold-club"]) {
+  const definition = actionSource.match(new RegExp(`id: "${webViewerAction}"[\\s\\S]*?protocolSafe: true`))?.[0] ?? "";
+  if (!definition.includes('kind: "integration"')) {
+    errors.push(`${webViewerAction} must remain a compiled integration and outside Markdown controls`);
+  }
 }
 if (
   !mainSource.includes('startupSurface: StartupSurface') ||

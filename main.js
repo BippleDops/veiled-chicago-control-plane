@@ -391,6 +391,139 @@ function rankActionsForSearch(actions, query, state = {}) {
   return ranked.map(({ sourceIndex: _sourceIndex, ...result }) => result);
 }
 
+// src/web-viewer.ts
+var CORE_WEB_VIEWER_VIEW_TYPE = "webviewer";
+var WEB_VIEWER_COMMIT_TIMEOUT_MS = 2e3;
+var WEB_VIEWER_COMMIT_POLL_MS = 50;
+var FIXED_WEB_VIEWER_URLS = {
+  "open-5etools": "https://5e.tools/",
+  "open-kobold-club": "https://koboldplus.club/"
+};
+var WEB_VIEWER_CANCELLED_MESSAGE = "Core Web Viewer activation was cancelled during plugin unload.";
+function canonicalWebViewerUrl(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:" || url.username || url.password) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+function isSafeMapUrl(raw) {
+  try {
+    const url = new URL(raw);
+    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    return url.protocol === "http:" && loopback && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+function isFixedWebViewerActionId(actionId) {
+  return Object.prototype.hasOwnProperty.call(FIXED_WEB_VIEWER_URLS, actionId);
+}
+function resolveWebViewerActionUrl(actionId, target, mapUrl) {
+  if (actionId === "open-veiled-map") {
+    return target === void 0 && isSafeMapUrl(mapUrl) ? canonicalWebViewerUrl(mapUrl) : null;
+  }
+  if (!isFixedWebViewerActionId(actionId)) return null;
+  const expected = FIXED_WEB_VIEWER_URLS[actionId];
+  const canonical = canonicalWebViewerUrl(target);
+  return target === expected && canonical === expected && expected.startsWith("https://") ? expected : null;
+}
+function defaultSleep(milliseconds) {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
+}
+async function waitForCanonicalWebViewerUrl(expectedUrl, readUrl, options = {}) {
+  const expected = canonicalWebViewerUrl(expectedUrl);
+  if (!expected) return false;
+  const timeoutMs = options.timeoutMs ?? WEB_VIEWER_COMMIT_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? WEB_VIEWER_COMMIT_POLL_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || !Number.isFinite(pollMs) || pollMs <= 0) return false;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? defaultSleep;
+  const deadline = now() + timeoutMs;
+  while (true) {
+    if (options.isCancelled?.()) return false;
+    if (canonicalWebViewerUrl(readUrl()) === expected) return true;
+    const remaining = deadline - now();
+    if (remaining <= 0) return false;
+    await sleep(Math.min(pollMs, remaining));
+    if (options.isCancelled?.()) return false;
+  }
+}
+var CoreWebViewerController = class {
+  constructor(workspace, waitOptions = {}) {
+    this.workspace = workspace;
+    this.waitOptions = waitOptions;
+  }
+  pending = /* @__PURE__ */ new Map();
+  open(url) {
+    if (canonicalWebViewerUrl(url) !== url) {
+      return Promise.reject(new Error("Core Web Viewer received a non-canonical or invalid URL."));
+    }
+    const existing = this.pending.get(url);
+    if (existing) return existing;
+    const activation = this.activate(url);
+    this.pending.set(url, activation);
+    const clear = () => {
+      if (this.pending.get(url) === activation) this.pending.delete(url);
+    };
+    void activation.then(clear, clear);
+    return activation;
+  }
+  clear() {
+    this.pending.clear();
+  }
+  assertActive() {
+    if (this.workspace.isCancelled()) throw new Error(WEB_VIEWER_CANCELLED_MESSAGE);
+  }
+  async activate(url) {
+    this.assertActive();
+    let existing = null;
+    this.workspace.forEachLeaf((leaf2) => {
+      if (existing) return;
+      const state = this.workspace.getViewState(leaf2);
+      if (state.type === CORE_WEB_VIEWER_VIEW_TYPE && canonicalWebViewerUrl(state.state?.url) === url) {
+        existing = leaf2;
+      }
+    });
+    this.assertActive();
+    if (existing) {
+      await this.workspace.revealLeaf(existing);
+      this.assertActive();
+      return existing;
+    }
+    this.assertActive();
+    const leaf = this.workspace.createTab();
+    try {
+      this.assertActive();
+      await this.workspace.setViewState(leaf, {
+        type: CORE_WEB_VIEWER_VIEW_TYPE,
+        state: { url, navigate: true }
+      });
+      this.assertActive();
+      if (this.workspace.getViewState(leaf).type !== CORE_WEB_VIEWER_VIEW_TYPE) {
+        throw new Error("Obsidian's core Web Viewer did not accept the requested view type.");
+      }
+      const committed = await waitForCanonicalWebViewerUrl(
+        url,
+        () => this.workspace.getViewState(leaf).state?.url,
+        { ...this.waitOptions, isCancelled: this.workspace.isCancelled }
+      );
+      this.assertActive();
+      if (!committed) throw new Error("Obsidian's core Web Viewer did not persist the validated URL in time.");
+      this.assertActive();
+      await this.workspace.revealLeaf(leaf);
+      this.assertActive();
+      return leaf;
+    } catch (error) {
+      this.workspace.detachLeaf(leaf);
+      throw error;
+    }
+  }
+};
+
 // src/actions.ts
 var BASE_CONTROL_ACTIONS = [
   {
@@ -738,11 +871,10 @@ var BASE_CONTROL_ACTIONS = [
   {
     id: "open-veiled-map",
     title: "Veiled Chicago Map",
-    description: "Open the local map app in its Custom Frame or browser fallback.",
+    description: "Open the validated loopback map app in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "map-pinned",
     kind: "integration",
-    target: "obsidian-custom-frames:open-custom-frames-veiled-chicago-map",
     fallback: "map-url",
     desktopOnly: true,
     protocolSafe: true
@@ -799,21 +931,21 @@ var BASE_CONTROL_ACTIONS = [
   {
     id: "open-5etools",
     title: "5eTools",
-    description: "Open the configured 5eTools Custom Frame.",
+    description: "Open the fixed 5eTools reference URL in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "book-open-text",
-    kind: "command",
-    target: "obsidian-custom-frames:open-custom-frames-5etools",
+    kind: "integration",
+    target: FIXED_WEB_VIEWER_URLS["open-5etools"],
     protocolSafe: true
   },
   {
     id: "open-kobold-club",
     title: "Kobold+ Fight Club",
-    description: "Open the configured encounter builder Custom Frame.",
+    description: "Open the fixed encounter-builder URL in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "shield-plus",
-    kind: "command",
-    target: "obsidian-custom-frames:open-custom-frames-kobold+-fight-club",
+    kind: "integration",
+    target: FIXED_WEB_VIEWER_URLS["open-kobold-club"],
     protocolSafe: true
   },
   {
@@ -981,14 +1113,14 @@ var ACTION_NAVIGATION = {
   "open-locations-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "places"] },
   "open-map-registry": { route: "world", verb: "OPEN", keywords: ["bundles", "readiness", "atlas"] },
   "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
-  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
+  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "web viewer", "vite"] },
   "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
   "open-omnisearch": { route: "tools", verb: "OPEN", keywords: ["full text", "body search", "local index"] },
   "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
   "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
   "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },
-  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "custom frame"] },
-  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder"] },
+  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "web viewer"] },
+  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder", "web viewer"] },
   "open-terminal": { route: "tools", verb: "OPEN", keywords: ["lean terminal", "shell", "embedded"] },
   "open-quick-search": { route: "tools", verb: "OPEN", keywords: ["campaign", "lookup"] },
   "open-vault-health": { route: "system", verb: "REVIEW", keywords: ["dashboard", "validation"] },
@@ -1222,9 +1354,10 @@ var INTERFACE_CAPABILITIES = [
   {
     id: "world-maps",
     capability: "World maps and local map application",
-    owner: "Leaflet and Custom Frames",
-    boundary: "Existing map corpus and fixed frame commands; no inferred geography.",
-    pluginIds: ["obsidian-leaflet-plugin", "obsidian-custom-frames"]
+    owner: "Leaflet and Obsidian Web Viewer",
+    boundary: "Existing map corpus plus fixed, validated Web Viewer routes; no inferred geography or arbitrary URLs.",
+    pluginIds: ["obsidian-leaflet-plugin"],
+    builtIn: true
   },
   {
     id: "tabletop-runtime",
@@ -2996,15 +3129,6 @@ function normalizeDeployment(value) {
   if (typeof value !== "string" || !value.trim()) return "UNDECLARED";
   return value.trim().replace(/[-_]+/g, " ").toUpperCase();
 }
-function isSafeMapUrl(raw) {
-  try {
-    const url = new URL(raw);
-    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-    return url.protocol === "http:" && loopback && !url.username && !url.password;
-  } catch {
-    return false;
-  }
-}
 function openExternalUrl(raw) {
   window.open(raw, "_blank", "noopener,noreferrer");
 }
@@ -3990,7 +4114,7 @@ var ControlPlaneSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    const mapSetting = new import_obsidian3.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.");
+    const mapSetting = new import_obsidian3.Setting(containerEl).setName("Local map URL").setDesc("Loopback HTTP URL opened only in Obsidian's core Web Viewer.");
     const mapErrorId = `vc-control-map-url-error-${crypto.randomUUID()}`;
     const mapError = mapSetting.descEl.createDiv({
       cls: "vc-control-setting-error",
@@ -4060,6 +4184,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   pendingSessionRoomModals = /* @__PURE__ */ new Set();
   commandSearchRefreshPending = false;
   activationPromise = null;
+  webViewerController = null;
   entityIndex = null;
   transactionInProgress = false;
   refreshTimer = null;
@@ -4067,6 +4192,15 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   unloading = false;
   async onload() {
     this.unloading = false;
+    this.webViewerController = new CoreWebViewerController({
+      forEachLeaf: (visit) => this.app.workspace.iterateAllLeaves(visit),
+      getViewState: (leaf) => leaf.getViewState(),
+      createTab: () => this.app.workspace.getLeaf("tab"),
+      setViewState: (leaf, viewState) => leaf.setViewState(viewState),
+      revealLeaf: (leaf) => this.app.workspace.revealLeaf(leaf),
+      detachLeaf: (leaf) => leaf.detach(),
+      isCancelled: () => this.unloading
+    });
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new ControlPlaneView(leaf, this));
     this.addRibbonIcon("radar", "Open Veiled Chicago Control Plane", () => void this.activateView());
@@ -4157,6 +4291,8 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     }
     this.activeChildren.clear();
     this.runningActions.clear();
+    this.webViewerController?.clear();
+    this.webViewerController = null;
     this.clearManagedProfiles();
     this.restoreWorkflowDom();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
@@ -4484,8 +4620,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       case "command":
         return action.target && this.commandAvailable(action.target) ? { available: true } : { available: false, reason: `Required plugin command is unavailable: ${action.target ?? "unknown"}` };
       case "integration":
-        if (action.target && this.commandAvailable(action.target)) return { available: true };
-        return isSafeMapUrl(this.settings.mapUrl) ? { available: true, reason: "Custom Frame unavailable; opens the configured browser URL." } : { available: false, reason: "No valid integration URL or Custom Frame command." };
+        return resolveWebViewerActionUrl(action.id, action.target, this.settings.mapUrl) ? { available: true } : { available: false, reason: "The compiled Web Viewer URL is invalid or outside its allowlist." };
       case "workflow":
         if (["create-managed-note", "capture-quick-inbox", "set-active-session-room"].includes(action.id)) {
           return { available: true };
@@ -4618,13 +4753,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         }
         break;
       case "integration":
-        if (action.target && this.commandAvailable(action.target)) {
-          if (!this.executeCommand(action.target)) {
-            throw new Error(`Could not execute the fixed integration adapter for ${action.title}.`);
-          }
-        } else {
-          openExternalUrl(this.settings.mapUrl);
-        }
+        await this.openWebViewer(action);
         break;
       case "external":
         if (action.target) openExternalUrl(action.target);
@@ -4654,6 +4783,15 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     const leaf = this.app.workspace.getLeaf(this.settings.openNotesInNewTab ? "tab" : false);
     await leaf.openFile(file, { active: true });
     await this.app.workspace.revealLeaf(leaf);
+  }
+  async openWebViewer(action) {
+    const url = resolveWebViewerActionUrl(action.id, action.target, this.settings.mapUrl);
+    if (!url) throw new Error(`The compiled Web Viewer URL for ${action.title} is invalid or outside its allowlist.`);
+    await this.activateWebViewerLeaf(url);
+  }
+  async activateWebViewerLeaf(url) {
+    if (this.unloading || !this.webViewerController) throw new Error(WEB_VIEWER_CANCELLED_MESSAGE);
+    return await this.webViewerController.open(url);
   }
   resolveDynamicFile(target) {
     const stateFile = this.fileAt(CURRENT_STATE_PATH);

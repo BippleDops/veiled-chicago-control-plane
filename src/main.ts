@@ -97,6 +97,12 @@ import {
   stableDomIdToken,
   type StartupSurface
 } from "./ui-contract";
+import {
+  CoreWebViewerController,
+  isSafeMapUrl,
+  resolveWebViewerActionUrl,
+  WEB_VIEWER_CANCELLED_MESSAGE
+} from "./web-viewer";
 
 const VIEW_TYPE = "veiled-chicago-control-plane";
 const CURRENT_STATE_PATH = VAULT_PATHS.currentState;
@@ -219,16 +225,6 @@ function wikilinkLabel(value: unknown): string | null {
 function normalizeDeployment(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "UNDECLARED";
   return value.trim().replace(/[-_]+/g, " ").toUpperCase();
-}
-
-function isSafeMapUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-    return url.protocol === "http:" && loopback && !url.username && !url.password;
-  } catch {
-    return false;
-  }
 }
 
 function openExternalUrl(raw: string): void {
@@ -1389,7 +1385,7 @@ class ControlPlaneSettingTab extends PluginSettingTab {
 
     const mapSetting = new Setting(containerEl)
       .setName("Local map URL")
-      .setDesc("Loopback HTTP URL used only as a fallback when the Veiled Chicago Map Custom Frame command is unavailable.");
+      .setDesc("Loopback HTTP URL opened only in Obsidian's core Web Viewer.");
     const mapErrorId = `vc-control-map-url-error-${crypto.randomUUID()}`;
     const mapError = mapSetting.descEl.createDiv({
       cls: "vc-control-setting-error",
@@ -1463,6 +1459,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private readonly pendingSessionRoomModals = new Set<SessionRoomSuggestModal>();
   private commandSearchRefreshPending = false;
   private activationPromise: Promise<WorkspaceLeaf> | null = null;
+  private webViewerController: CoreWebViewerController<WorkspaceLeaf> | null = null;
   private entityIndex: readonly EntityIndexEntry[] | null = null;
   private transactionInProgress = false;
   private refreshTimer: number | null = null;
@@ -1471,6 +1468,15 @@ export default class VeiledChicagoControlPlane extends Plugin {
 
   async onload(): Promise<void> {
     this.unloading = false;
+    this.webViewerController = new CoreWebViewerController<WorkspaceLeaf>({
+      forEachLeaf: (visit) => this.app.workspace.iterateAllLeaves(visit),
+      getViewState: (leaf) => leaf.getViewState(),
+      createTab: () => this.app.workspace.getLeaf("tab"),
+      setViewState: (leaf, viewState) => leaf.setViewState(viewState),
+      revealLeaf: (leaf) => this.app.workspace.revealLeaf(leaf),
+      detachLeaf: (leaf) => leaf.detach(),
+      isCancelled: () => this.unloading
+    });
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new ControlPlaneView(leaf, this));
     this.addRibbonIcon("radar", "Open Veiled Chicago Control Plane", () => void this.activateView());
@@ -1573,6 +1579,8 @@ export default class VeiledChicagoControlPlane extends Plugin {
     }
     this.activeChildren.clear();
     this.runningActions.clear();
+    this.webViewerController?.clear();
+    this.webViewerController = null;
     this.clearManagedProfiles();
     this.restoreWorkflowDom();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
@@ -1952,10 +1960,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
           ? { available: true }
           : { available: false, reason: `Required plugin command is unavailable: ${action.target ?? "unknown"}` };
       case "integration":
-        if (action.target && this.commandAvailable(action.target)) return { available: true };
-        return isSafeMapUrl(this.settings.mapUrl)
-          ? { available: true, reason: "Custom Frame unavailable; opens the configured browser URL." }
-          : { available: false, reason: "No valid integration URL or Custom Frame command." };
+        return resolveWebViewerActionUrl(action.id, action.target, this.settings.mapUrl)
+          ? { available: true }
+          : { available: false, reason: "The compiled Web Viewer URL is invalid or outside its allowlist." };
       case "workflow":
         if (["create-managed-note", "capture-quick-inbox", "set-active-session-room"].includes(action.id)) {
           return { available: true };
@@ -2103,13 +2110,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         }
         break;
       case "integration":
-        if (action.target && this.commandAvailable(action.target)) {
-          if (!this.executeCommand(action.target)) {
-            throw new Error(`Could not execute the fixed integration adapter for ${action.title}.`);
-          }
-        } else {
-          openExternalUrl(this.settings.mapUrl);
-        }
+        await this.openWebViewer(action);
         break;
       case "external":
         if (action.target) openExternalUrl(action.target);
@@ -2140,6 +2141,17 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const leaf = this.app.workspace.getLeaf(this.settings.openNotesInNewTab ? "tab" : false);
     await leaf.openFile(file, { active: true });
     await this.app.workspace.revealLeaf(leaf);
+  }
+
+  private async openWebViewer(action: ControlAction): Promise<void> {
+    const url = resolveWebViewerActionUrl(action.id, action.target, this.settings.mapUrl);
+    if (!url) throw new Error(`The compiled Web Viewer URL for ${action.title} is invalid or outside its allowlist.`);
+    await this.activateWebViewerLeaf(url);
+  }
+
+  private async activateWebViewerLeaf(url: string): Promise<WorkspaceLeaf> {
+    if (this.unloading || !this.webViewerController) throw new Error(WEB_VIEWER_CANCELLED_MESSAGE);
+    return await this.webViewerController.open(url);
   }
 
   private resolveDynamicFile(target: string): { file: TFile | null; available: Availability } {

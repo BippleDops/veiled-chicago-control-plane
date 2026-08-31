@@ -57,7 +57,7 @@ Status vocabulary:
 | 44 | GOV-04 | Physical and desktop command surfaces | Guarded contract | Fifty-six stable Obsidian command IDs, query-ranked native command search, grouped route controls, and fixed native/retrieval adapters are available for reviewed desktop bindings. |
 | 45 | GOV-05 | Calendar and task bridge | Future implementation | Requires a separately reviewed n8n workflow and constrained endpoint. |
 | 46 | GOV-06 | D&D Beyond provenance snapshots | Future implementation | No undocumented API or scraping behavior is bundled. |
-| 47 | GOV-07 | Map, combat, dice, and handout adapters | Plugin delivered | Fixed installed-command IDs, loopback map URL validation, and allowlisted map lifecycle actions. |
+| 47 | GOV-07 | Map, combat, dice, and handout adapters | Plugin delivered | Fixed combat/dice commands, core Web Viewer leaves with two fixed HTTPS targets, loopback-only map URL validation, and allowlisted map lifecycle actions. |
 | 48 | GOV-08 | Controlled AI media queue | Future implementation | Requires an external ComfyUI/Piper worker and provenance store. |
 | 49 | GOV-09 | Player-safe release and export service | Future implementation | Requires feature 6's complete workspace/content gate and explicit recipient review. |
 | 50 | GOV-10 | Operations, rollback, and health dashboard | Plugin delivered | Fixed interface-capability ownership/status, workflow gates, recent automation, mutation receipts, and rollback behavior. |

@@ -51,9 +51,10 @@ export const INTERFACE_CAPABILITIES: readonly CapabilityDefinition[] = [
   {
     id: "world-maps",
     capability: "World maps and local map application",
-    owner: "Leaflet and Custom Frames",
-    boundary: "Existing map corpus and fixed frame commands; no inferred geography.",
-    pluginIds: ["obsidian-leaflet-plugin", "obsidian-custom-frames"]
+    owner: "Leaflet and Obsidian Web Viewer",
+    boundary: "Existing map corpus plus fixed, validated Web Viewer routes; no inferred geography or arbitrary URLs.",
+    pluginIds: ["obsidian-leaflet-plugin"],
+    builtIn: true
   },
   {
     id: "tabletop-runtime",

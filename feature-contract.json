@@ -48,7 +48,7 @@
     { "id": "GOV-04", "owner": "shared", "status": "guarded", "evidence": "56 stable commands and query-ranked native adapters", "test": "navigation, action-policy, and vault binding audit", "gate": "reviewed desktop bindings" },
     { "id": "GOV-05", "owner": "external", "status": "future", "evidence": "none", "test": "not implemented", "gate": "reviewed n8n workflow" },
     { "id": "GOV-06", "owner": "external", "status": "future", "evidence": "none", "test": "not implemented", "gate": "documented provenance source" },
-    { "id": "GOV-07", "owner": "plugin", "status": "delivered", "evidence": "fixed map combat dice actions", "test": "release and runtime checks", "gate": "installed integrations" },
+    { "id": "GOV-07", "owner": "plugin", "status": "delivered", "evidence": "core Web Viewer plus fixed map combat dice actions", "test": "web-viewer release and runtime checks", "gate": "validated Web Viewer routes" },
     { "id": "GOV-08", "owner": "external", "status": "future", "evidence": "none", "test": "not implemented", "gate": "reviewed media worker" },
     { "id": "GOV-09", "owner": "external", "status": "future", "evidence": "none", "test": "not implemented", "gate": "complete player-safe export gate" },
     { "id": "GOV-10", "owner": "plugin", "status": "delivered", "evidence": "operations health and rollback", "test": "npm run verify", "gate": "runtime smoke test" }

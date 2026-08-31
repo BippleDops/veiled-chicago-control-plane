@@ -1,5 +1,6 @@
 import { VAULT_PATHS } from "./paths";
 import { validateActionNavigation, type ActionVerb, type PrimaryRoute } from "./navigation";
+import { FIXED_WEB_VIEWER_URLS } from "./web-viewer";
 
 export type ActionGroup =
   | "Live operations"
@@ -389,11 +390,10 @@ const BASE_CONTROL_ACTIONS = [
   {
     id: "open-veiled-map",
     title: "Veiled Chicago Map",
-    description: "Open the local map app in its Custom Frame or browser fallback.",
+    description: "Open the validated loopback map app in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "map-pinned",
     kind: "integration",
-    target: "obsidian-custom-frames:open-custom-frames-veiled-chicago-map",
     fallback: "map-url",
     desktopOnly: true,
     protocolSafe: true
@@ -450,21 +450,21 @@ const BASE_CONTROL_ACTIONS = [
   {
     id: "open-5etools",
     title: "5eTools",
-    description: "Open the configured 5eTools Custom Frame.",
+    description: "Open the fixed 5eTools reference URL in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "book-open-text",
-    kind: "command",
-    target: "obsidian-custom-frames:open-custom-frames-5etools",
+    kind: "integration",
+    target: FIXED_WEB_VIEWER_URLS["open-5etools"],
     protocolSafe: true
   },
   {
     id: "open-kobold-club",
     title: "Kobold+ Fight Club",
-    description: "Open the configured encounter builder Custom Frame.",
+    description: "Open the fixed encounter-builder URL in Obsidian's core Web Viewer.",
     group: "Applications",
     icon: "shield-plus",
-    kind: "command",
-    target: "obsidian-custom-frames:open-custom-frames-kobold+-fight-club",
+    kind: "integration",
+    target: FIXED_WEB_VIEWER_URLS["open-kobold-club"],
     protocolSafe: true
   },
   {
@@ -640,14 +640,14 @@ const ACTION_NAVIGATION = {
   "open-locations-base": { route: "world", verb: "OPEN", keywords: ["database", "base", "places"] },
   "open-map-registry": { route: "world", verb: "OPEN", keywords: ["bundles", "readiness", "atlas"] },
   "open-player-portal": { route: "world", verb: "OPEN", keywords: ["player safe", "handout"] },
-  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "custom frame", "vite"] },
+  "open-veiled-map": { route: "tools", verb: "OPEN", keywords: ["chicago", "web viewer", "vite"] },
   "open-quick-switcher": { route: "tools", verb: "OPEN", keywords: ["native", "files", "navigate"] },
   "open-omnisearch": { route: "tools", verb: "OPEN", keywords: ["full text", "body search", "local index"] },
   "open-bookmarks": { route: "tools", verb: "OPEN", keywords: ["native", "saved links"] },
   "open-workspaces": { route: "tools", verb: "OPEN", keywords: ["native", "layout", "panes"] },
   "save-workspace": { route: "tools", verb: "CAPTURE", keywords: ["native", "layout", "snapshot"] },
-  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "custom frame"] },
-  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder"] },
+  "open-5etools": { route: "tools", verb: "OPEN", keywords: ["rules", "reference", "web viewer"] },
+  "open-kobold-club": { route: "tools", verb: "OPEN", keywords: ["encounter", "builder", "web viewer"] },
   "open-terminal": { route: "tools", verb: "OPEN", keywords: ["lean terminal", "shell", "embedded"] },
   "open-quick-search": { route: "tools", verb: "OPEN", keywords: ["campaign", "lookup"] },
   "open-vault-health": { route: "system", verb: "REVIEW", keywords: ["dashboard", "validation"] },
