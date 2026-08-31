@@ -4,7 +4,7 @@ import {
   buildDeclarationProposal,
   buildEventProposal,
   buildManagedNoteProposal,
-  buildRunProposal,
+  buildRunProposal as buildRunProposalRaw,
   buildSessionRoomProposal,
   buildTargetBaseline,
   buildTranscriptionRequestProposal,
@@ -31,6 +31,20 @@ import { CONTROL_ACTIONS } from "../src/actions";
 
 function expectThrow(callback: () => unknown, message: RegExp): void {
   assert.throws(callback, message);
+}
+
+const defaultCurrentStateSource =
+  '---\nlast_played_record: "[[1-Campaign/Sessions/Session 8/Session 8 Journal.md|Session 8]]"\ndeployment_mode: player-selected\n---\n';
+const defaultCurrentStateEvidence = { sourcePath: VAULT_PATHS.currentState, contents: defaultCurrentStateSource };
+type RunProposalInput = Parameters<typeof buildRunProposalRaw>[0];
+type TestRunProposalInput = Omit<RunProposalInput, "currentStateEvidence"> & {
+  currentStateEvidence?: RunProposalInput["currentStateEvidence"];
+  latestPlayedLabel?: string;
+};
+
+function buildRunProposal(input: TestRunProposalInput): ReturnType<typeof buildRunProposalRaw> {
+  const { latestPlayedLabel: _legacyTestLabel, currentStateEvidence = defaultCurrentStateEvidence, ...proposal } = input;
+  return buildRunProposalRaw({ ...proposal, currentStateEvidence });
 }
 
 assert.equal(normalizeVaultPath("1-Campaign//DM/Operations Inbox/"), "1-Campaign/DM/Operations Inbox");
@@ -204,6 +218,9 @@ assert.ok(room.operations.every((operation) => operation.kind === "create"));
 assert.ok(room.operations.every((operation) => operation.path.startsWith("1-Campaign/Sessions/Session 9/")));
 assert.ok(room.operations.every((operation) => !operation.contents.includes("next_session:")));
 assert.match(room.operations[0]?.contents ?? "", /exactly one supported selection authority/);
+assert.match(room.operations[1]?.contents ?? "", /Markdown controls are navigation-only/);
+assert.doesNotMatch(room.operations[1]?.contents ?? "", /actions:.*(?:capture-player-declaration|generate-session-run)/);
+assert.match(room.operations[2]?.contents ?? "", /vcg:selection <declaration-id>/);
 assert.match(room.operations[5]?.contents ?? "", /Player path.*or DM path/);
 
 const declaration = buildDeclarationProposal({
@@ -243,10 +260,14 @@ assert.match(run.operations[0]?.contents ?? "", /Conditional prep only/);
 assert.match(run.operations[0]?.contents ?? "", /Latest played record:\*\* Session 8/);
 assert.match(run.operations[0]?.contents ?? "", /Selection authority:\*\* verbatim player declaration/);
 assert.match(run.operations[0]?.contents ?? "", /Evidence marker:\*\* `vcg:declaration vcg-test`/);
-assert.equal(run.evidenceSources?.length, 1);
+assert.match(run.operations[0]?.contents ?? "", /Current State snapshot:\*\* SHA-256/);
+assert.deepEqual(
+  run.evidenceSources?.map(({ path }) => path),
+  [VAULT_PATHS.currentState, "1-Campaign/Sessions/Session 9/Session 9 Decision Intake.md"]
+);
 
 const currentStateSelectionSource =
-  "---\ndeployment_mode: dm-selected-from-live-handoff\nselected_lead: lead-from-live-handoff\n---\n";
+  '---\nlast_played_record: "[[1-Campaign/Sessions/Session 8/Session 8 Journal.md|Session 8]]"\ndeployment_mode: dm-selected-from-live-handoff\nselected_lead: lead-from-live-handoff\n---\n';
 
 const playerSelection = collectRunSelectionEvidence({
   roomPath: "1-Campaign/Sessions/Session 9",
@@ -277,6 +298,66 @@ const structuredPlayerRun = buildRunProposal({
 });
 assert.match(structuredPlayerRun.operations[0]?.contents ?? "", /vcg:declaration vcg-structured-player/);
 
+const explicitlySelectedPlayerEvidence = collectRunSelectionEvidence({
+  roomPath: "1-Campaign/Sessions/Session 9",
+  displayName: "Session 9",
+  decisionIntakeContents:
+    "<!-- vcg:declaration vcg-first -->\n<!-- vcg:declaration vcg-second -->\n<!-- vcg:selection vcg-first -->",
+  currentStateContents: null
+});
+const explicitlySelectedPlayerRun = buildRunProposal({
+  roomPath: "1-Campaign/Sessions/Session 9",
+  displayName: "Session 9",
+  selectionEvidence: explicitlySelectedPlayerEvidence,
+  latestPlayedLabel: "Session 8",
+  createdDate: "2026-08-29",
+  proposalId: "vcg-test-explicit-player-selection"
+});
+assert.match(explicitlySelectedPlayerRun.operations[0]?.contents ?? "", /vcg:declaration vcg-first/);
+assert.match(explicitlySelectedPlayerRun.operations[0]?.contents ?? "", /vcg:selection vcg-first/);
+
+for (const [label, contents, expected] of [
+  [
+    "missing selector",
+    "<!-- vcg:declaration vcg-first -->\n<!-- vcg:declaration vcg-second -->",
+    /Multiple player declarations require exactly one explicit standalone vcg:selection marker/
+  ],
+  [
+    "unknown selector",
+    "<!-- vcg:declaration vcg-first -->\n<!-- vcg:declaration vcg-second -->\n<!-- vcg:selection vcg-unknown -->",
+    /must name a declaration marker/
+  ],
+  [
+    "multiple selectors",
+    "<!-- vcg:declaration vcg-first -->\n<!-- vcg:declaration vcg-second -->\n<!-- vcg:selection vcg-first -->\n<!-- vcg:selection vcg-second -->",
+    /at most one standalone vcg:selection marker/
+  ],
+  [
+    "fenced selector",
+    "<!-- vcg:declaration vcg-first -->\n<!-- vcg:declaration vcg-second -->\n```markdown\n<!-- vcg:selection vcg-first -->\n```",
+    /Multiple player declarations require exactly one explicit standalone vcg:selection marker/
+  ]
+] as const) {
+  expectThrow(
+    () =>
+      buildRunProposal({
+        roomPath: "1-Campaign/Sessions/Session 9",
+        displayName: "Session 9",
+        selectionEvidence: [
+          {
+            authority: "player-declaration",
+            sourcePath: "1-Campaign/Sessions/Session 9/Session 9 Decision Intake.md",
+            contents
+          }
+        ],
+        latestPlayedLabel: "Session 8",
+        createdDate: "2026-08-29",
+        proposalId: `vcg-test-${label.replaceAll(" ", "-")}`
+      }),
+    expected
+  );
+}
+
 const dmSelection = collectRunSelectionEvidence({
   roomPath: "1-Campaign/Sessions/Session 9",
   displayName: "Session 9",
@@ -290,6 +371,7 @@ const dmRun = buildRunProposal({
   roomPath: "1-Campaign/Sessions/Session 9",
   displayName: "Session 9",
   selectionEvidence: dmSelection,
+  currentStateEvidence: { sourcePath: VAULT_PATHS.currentState, contents: currentStateSelectionSource },
   latestPlayedLabel: "Session 8",
   createdDate: "2026-08-29",
   proposalId: "vcg-test-dm-run"
@@ -300,6 +382,46 @@ assert.match(dmRun.operations[0]?.contents ?? "", /Selected lead:\*\* `lead-from
 assert.match(dmRun.operations[0]?.contents ?? "", /does not claim or fabricate player intent/);
 assert.equal(dmRun.evidenceSources?.[0]?.path, VAULT_PATHS.currentState);
 assert.equal(dmRun.evidenceSources?.[0]?.contentHash, contentHash(currentStateSelectionSource));
+assert.equal(dmRun.evidenceSources?.length, 1);
+expectThrow(
+  () =>
+    buildRunProposal({
+      roomPath: "1-Campaign/Sessions/Session 9",
+      displayName: "Session 9",
+      selectionEvidence: dmSelection,
+      currentStateEvidence: defaultCurrentStateEvidence,
+      latestPlayedLabel: "Session 8",
+      createdDate: "2026-08-29",
+      proposalId: "vcg-test-dm-current-state-snapshot-mismatch"
+    }),
+  /must match the bound Current State evidence snapshot/
+);
+expectThrow(
+  () =>
+    buildRunProposal({
+      roomPath: "1-Campaign/Sessions/Session 9",
+      displayName: "Session 9",
+      declarationEvidence: "<!-- vcg:declaration vcg-test -->",
+      currentStateEvidence: { sourcePath: "1-Campaign/DM/Other State.md", contents: defaultCurrentStateSource },
+      latestPlayedLabel: "Session 8",
+      createdDate: "2026-08-29",
+      proposalId: "vcg-test-wrong-current-state-source"
+    }),
+  /Current State evidence must come from/
+);
+expectThrow(
+  () =>
+    buildRunProposal({
+      roomPath: "1-Campaign/Sessions/Session 9",
+      displayName: "Session 9",
+      declarationEvidence: "<!-- vcg:declaration vcg-test -->",
+      currentStateEvidence: { sourcePath: VAULT_PATHS.currentState, contents: "---\ndeployment_mode: player-selected\n---\n" },
+      latestPlayedLabel: "Session 8",
+      createdDate: "2026-08-29",
+      proposalId: "vcg-test-missing-latest-played"
+    }),
+  /requires one exact last_played_record wikilink/
+);
 const dmRunTarget = dmRun.operations[0];
 assert.ok(dmRunTarget);
 const dmEvidenceBaseline = buildTargetBaseline(

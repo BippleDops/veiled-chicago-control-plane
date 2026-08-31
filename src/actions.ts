@@ -19,6 +19,8 @@ export type ActionKind =
   | "workflow"
   | "script";
 
+export type ActionSource = "view" | "block" | "command" | "protocol";
+
 interface ControlActionBase {
   id: string;
   title: string;
@@ -38,6 +40,7 @@ export interface ControlAction extends ControlActionBase {
   route: PrimaryRoute;
   verb: ActionVerb;
   keywords?: readonly string[];
+  allowedSources: readonly ActionSource[];
 }
 
 const BASE_CONTROL_ACTIONS = [
@@ -659,9 +662,19 @@ const ACTION_NAVIGATION = {
   "stop-map-server": { route: "system", verb: "STOP", keywords: ["process", "vite", "loopback"] }
 } as const satisfies Record<ControlActionId, ActionNavigation>;
 
+const MARKDOWN_SAFE_ACTION_KINDS = new Set<ActionKind>(["view", "note", "dynamic-note"]);
+
+function allowedSourcesForAction(action: ControlActionBase): readonly ActionSource[] {
+  const sources: ActionSource[] = ["view", "command"];
+  if (MARKDOWN_SAFE_ACTION_KINDS.has(action.kind)) sources.push("block");
+  if (action.protocolSafe === true) sources.push("protocol");
+  return sources;
+}
+
 export const CONTROL_ACTIONS: readonly ControlAction[] = BASE_CONTROL_ACTIONS.map((action) => ({
   ...action,
-  ...ACTION_NAVIGATION[action.id]
+  ...ACTION_NAVIGATION[action.id],
+  allowedSources: allowedSourcesForAction(action)
 }));
 
 validateActionNavigation(CONTROL_ACTIONS);
@@ -677,9 +690,24 @@ export interface ControlBlockSpec {
 
 const CONTROL_BLOCK_KEYS = new Set(["title", "subtitle", "actions", "compact"]);
 
+export const CONTROL_BLOCK_LIMITS = {
+  sourceCharacters: 4096,
+  lines: 64,
+  titleCharacters: 120,
+  subtitleCharacters: 240,
+  actions: 12
+} as const;
+
 export function parseControlBlock(source: string): ControlBlockSpec {
+  if (source.length > CONTROL_BLOCK_LIMITS.sourceCharacters) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.sourceCharacters} characters.`);
+  }
+  const lines = source.split(/\r?\n/);
+  if (lines.length > CONTROL_BLOCK_LIMITS.lines) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.lines} lines.`);
+  }
   const values = new Map<string, string>();
-  for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
+  for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const separator = line.indexOf(":");
@@ -696,13 +724,30 @@ export function parseControlBlock(source: string): ControlBlockSpec {
     .map((value) => value.trim())
     .filter(Boolean);
   if (actionIds.length === 0) throw new Error("At least one allowlisted action is required.");
+  if (actionIds.length > CONTROL_BLOCK_LIMITS.actions) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.actions} actions.`);
+  }
+  if (new Set(actionIds).size !== actionIds.length) throw new Error("Control block actions must be unique.");
   const unknown = actionIds.filter((id) => !ACTION_BY_ID.has(id));
   if (unknown.length > 0) throw new Error(`Unknown action: ${unknown.join(", ")}`);
+  const sourceBlocked = actionIds.filter((id) => !ACTION_BY_ID.get(id)?.allowedSources.includes("block"));
+  if (sourceBlocked.length > 0) {
+    throw new Error(`Action is not permitted from Markdown: ${sourceBlocked.join(", ")}`);
+  }
+
+  const title = values.get("title") || "Veiled Chicago controls";
+  const subtitle = values.get("subtitle") || "Allowlisted vault actions";
+  if (title.length > CONTROL_BLOCK_LIMITS.titleCharacters) {
+    throw new Error(`Control block titles are limited to ${CONTROL_BLOCK_LIMITS.titleCharacters} characters.`);
+  }
+  if (subtitle.length > CONTROL_BLOCK_LIMITS.subtitleCharacters) {
+    throw new Error(`Control block subtitles are limited to ${CONTROL_BLOCK_LIMITS.subtitleCharacters} characters.`);
+  }
 
   return {
-    title: values.get("title") || "Veiled Chicago controls",
-    subtitle: values.get("subtitle") || "Allowlisted vault actions",
-    actions: [...new Set(actionIds)],
+    title,
+    subtitle,
+    actions: actionIds,
     compact: /^(?:true|yes|1)$/i.test(values.get("compact") ?? "false")
   };
 }

@@ -50,6 +50,13 @@ export class ControlActionSearchModal extends FuzzySuggestModal<ControlAction> {
     }).map(({ action }) => action);
   }
 
+  getSuggestions(query: string): FuzzyMatch<ControlAction>[] {
+    return rankActionsForSearch(this.options.actions, query, {
+      favoriteActionIds: this.options.favoriteActionIds,
+      recentActions: this.options.recentActions
+    }).map(({ action, score }) => ({ item: action, match: { score, matches: [] } }));
+  }
+
   getItemText(action: ControlAction): string {
     return buildActionSearchText(action, {
       favorite: this.favorites.has(action.id),

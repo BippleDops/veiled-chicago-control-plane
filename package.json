@@ -1,6 +1,6 @@
 {
   "name": "veiled-chicago-control-plane",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "private": true,
   "description": "A secure Obsidian campaign control plane for the Veiled Chicago vault.",
   "author": "BippleDops",

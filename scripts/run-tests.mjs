@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import esbuild from "esbuild";
 
 const testEntries = [
+  "tests/action-policy.test.ts",
   "tests/operating.test.ts",
   "tests/navigation.test.ts",
   "tests/entity-navigator.test.ts",

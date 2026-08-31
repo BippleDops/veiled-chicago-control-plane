@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 - 2026-08-30
+
+- Wire native command-search suggestions to the complete query-aware ranking model while preserving favorite and recent boosts.
+- Compile a typed action-source policy and enforce it again at dispatch; Markdown controls are limited to fixed first-party and vault-note navigation and cannot expose workflows, commands, integrations, external URLs, recording, processes, or scripts.
+- Bound `vcg-control` parsing by source size, line count, text lengths, action count, and unique action IDs.
+- Replace free-text active-room entry with a native fuzzy chooser over existing direct-child session folders, then revalidate the folder at selection, availability, and workflow use.
+- Revalidate stored active-room settings before presenting them as selected; stale paths are labelled unavailable and remain clearable.
+- Bind every RUN proposal to Current State, add Decision Intake to the player-authority read set, and require one explicit standalone `vcg:selection` marker when multiple declaration markers exist.
+- Limit glass blur to short bounded chrome, cap it at 18px, compact route titles, and replace loud running treatment with a two-pixel signal datum.
+- Preserve all 56 compiled action IDs and the proposal-only, human-reviewed execution boundary.
+
 ## 1.3.2 - 2026-08-30
 
 - Preserve the parent process environment while enforcing `PYTHONDONTWRITEBYTECODE=1` at both Python launch boundaries.

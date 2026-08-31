@@ -6,7 +6,7 @@ const styles = readFileSync("styles.css", "utf8");
 const supportBlocks = styles.match(/@supports \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\)/g) ?? [];
 assert.equal(supportBlocks.length, 1, "glass enhancement must have one cascade owner");
 
-const glassMarker = "/* Progressive glass enhancement follows every opaque surface baseline";
+const glassMarker = "/* Progressive glass belongs only to bounded chrome.";
 const glassIndex = styles.indexOf(glassMarker);
 assert.ok(glassIndex > styles.lastIndexOf("@container vc-control-plane"), "glass layer must follow responsive surface baselines");
 const reducedTransparencyIndex = styles.indexOf("@media (prefers-reduced-transparency: reduce)", glassIndex);
@@ -23,24 +23,9 @@ assert.match(
 );
 
 const glassSurfaces = [
-  ".vc-control-hero",
-  ".vc-control-toolbar",
-  ".vc-control-section",
-  ".vc-control-router",
-  ".vc-control-policy",
-  ".vc-control-health",
-  ".vc-control-transactions",
-  ".vc-control-runs",
-  ".vc-control-block",
-  ".vc-ad-statblock",
   ".vc-control-app-header",
-  ".vc-control-route-nav",
-  ".vc-control-context",
   ".vc-control-bottom-nav",
-  ".vc-control-more-panel",
-  ".vc-control-favorites",
-  ".vc-control-recents",
-  ".vc-control-entity-toolbar"
+  ".vc-control-more-panel"
 ];
 const glassBlock = styles.slice(glassIndex, styles.indexOf("@media (pointer: coarse)", glassIndex));
 const reducedBlock = styles.slice(
@@ -56,6 +41,25 @@ for (const selector of glassSurfaces) {
   assert.ok(forcedBlock.includes(selector), `forced-colors fallback is missing ${selector}`);
   assert.ok(printBlock.includes(selector), `print fallback is missing ${selector}`);
 }
+
+for (const selector of [
+  ".vc-control-route-nav",
+  ".vc-control-context",
+  ".vc-control-section",
+  ".vc-control-router",
+  ".vc-control-favorites",
+  ".vc-control-recents",
+  ".vc-control-entity-toolbar"
+]) {
+  assert.ok(!glassBlock.includes(selector), `persistent or nested surface must remain opaque: ${selector}`);
+}
+assert.match(glassBlock, /blur\(min\(var\(--vcg-blur, 18px\), 18px\)\)/, "bounded blur must be capped at 18px");
+
+assert.match(
+  styles,
+  /\.vc-control-action\.is-running\s*\{[^}]*border-block-start:\s*2px solid var\(--vccp-signal\);/s,
+  "running state must use a quiet two-pixel signal datum"
+);
 
 assert.match(
   styles,

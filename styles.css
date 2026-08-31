@@ -782,6 +782,11 @@
   animation: vc-control-spin 900ms linear infinite;
 }
 
+.vc-control-action.is-running {
+  border-block-start: 2px solid var(--vccp-signal);
+  background: color-mix(in srgb, var(--vccp-surface-strong) 96%, var(--vccp-signal));
+}
+
 @keyframes vc-control-spin {
   to {
     rotate: 1turn;
@@ -1548,7 +1553,7 @@
   overflow-wrap: anywhere;
   color: var(--text-normal);
   font-family: var(--vcg-font-display, var(--font-text));
-  font-size: clamp(1.45rem, 3cqi, 2.15rem);
+  font-size: clamp(1.35rem, 2.4cqi, 1.9rem);
   line-height: 1.05;
   text-wrap: balance;
 }
@@ -2238,30 +2243,16 @@
   }
 }
 
-/* Progressive glass enhancement follows every opaque surface baseline so the
- * fallback remains readable while capable clients receive the intended layer. */
+/* Progressive glass belongs only to bounded chrome. Persistent rails and
+ * content cards stay opaque so nested blur cannot flatten hierarchy or tax the
+ * compositor. Every surface still has an opaque baseline above. */
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .vc-control-hero,
-  .vc-control-toolbar,
-  .vc-control-section,
-  .vc-control-router,
-  .vc-control-policy,
-  .vc-control-health,
-  .vc-control-transactions,
-  .vc-control-runs,
-  .vc-control-block,
-  .vc-ad-statblock,
   .vc-control-app-header,
-  .vc-control-route-nav,
-  .vc-control-context,
   .vc-control-bottom-nav,
-  .vc-control-more-panel,
-  .vc-control-favorites,
-  .vc-control-recents,
-  .vc-control-entity-toolbar {
+  .vc-control-more-panel {
     background: var(--vccp-glass);
-    backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
-    -webkit-backdrop-filter: blur(calc(var(--vcg-blur, 18px) * 0.8)) saturate(125%);
+    backdrop-filter: blur(min(var(--vcg-blur, 18px), 18px)) saturate(118%);
+    -webkit-backdrop-filter: blur(min(var(--vcg-blur, 18px), 18px)) saturate(118%);
   }
 }
 

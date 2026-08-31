@@ -2,7 +2,7 @@
 
 A desktop-only Obsidian plugin that turns the Veiled Chicago campaign vault into an application-like control surface. It provides a six-route semantic HTML shell, native command and entity navigation, a first-party startup surface, safe Markdown compatibility renderers, fixed Obsidian adapters, and a deliberately narrow local-automation bridge.
 
-Version 1.3.2 preserves the caller environment while enforcing no-bytecode mode at both Python launch boundaries, preventing Control Plane audits from leaving `__pycache__` residue in the vault. Version 1.3.1 remains the accessibility and presentation patch for the focus-only skip link, observed-context metric width, and consolidated glass enhancement layer.
+Version 1.4.0 hardens the operating surface without adding action IDs: command search now applies its full query ranking, Markdown controls have a typed navigation-only source policy and bounded parser, active rooms are selected from existing direct-child folders, and RUN proposals bind a complete Current State plus selection-evidence snapshot. Version 1.3.2 remains the no-bytecode process-boundary patch.
 
 ## Install with BRAT
 
@@ -28,15 +28,15 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 
 - Builds a responsive, semantic HTML application shell with Home, Session, Create, World, Tools, and System routes.
 - Registers 56 fixed navigation, creation, session, governance, installed-plugin, integration, and local-script actions while retaining all 55 version 1.2 IDs.
-- Provides native fuzzy command search, capped favorites and recents, bounded in-memory route history, and a persistent observed-context pane.
+- Provides native fuzzy command search with query-aware ranking, capped favorites and recents, bounded in-memory route history, and a persistent observed-context pane.
 - Opens or reuses exactly one Control Plane leaf at layout ready by default; the validated `startupSurface` setting can leave the saved layout unchanged.
 - Groups dense route actions by their compiled taxonomy and exposes keyboard-operable in-page group links without duplicating actions.
 - Provides a lazy, fixed-root entity navigator over cached frontmatter for NPCs, locations, factions, items, and session records, with debounced search and explicit result relationships; it does not read note bodies or claim semantic similarity.
 - Provides a dynamic Live Edge Router that reads explicit Current State and a separately selected active room without inferring chronology.
 - Creates schema-driven draft notes through preview-bound target baselines and a rollback-aware transaction broker.
-- Scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on exactly one validated selection-evidence authority, and routes promotion through human review.
+- Selects only existing direct-child session folders through a native fuzzy chooser, revalidates the folder before use, scaffolds session rooms, captures verbatim declarations and live events, gates RUN generation on exactly one validated selection-evidence authority, and routes promotion through human review.
 - Defines six guarded AI context configurations. They constrain this plugin's surfaces but do not claim provider-side retrieval enforcement.
-- Renders allowlisted `vcg-control` Markdown blocks; note content cannot supply commands, paths, arguments, or shell fragments.
+- Renders bounded, allowlisted `vcg-control` Markdown blocks under a typed navigation-only source policy; note content cannot expose workflows, Obsidian commands, integrations, external URLs, recording, processes, scripts, paths, arguments, or shell fragments.
 - Renders legacy `ad-statblock` blocks as labelled, non-executable Markdown after neutralizing HTML, embeds, executable code-block processors, Dataview expressions, and Meta Bind directives.
 - Applies workflow profiles (`vcg-dashboard`, `vcg-session`, `vcg-dossier`, `vcg-data-deck`, `vcg-map-room`, and `vcg-handout`) from the active note's path and frontmatter without editing the note.
 - Integrates through compiled command IDs with Omnisearch, Quick Switcher, Bookmarks, Workspaces, Audio Recorder, Dice Roller, Initiative Tracker, Custom Frames, and Lean Terminal when those capabilities are present. The Omnisearch adapter is fixed to the verified `omnisearch:show-modal` command and does not manage its index or HTTP settings.
@@ -46,9 +46,9 @@ Reload Obsidian, enable the plugin under **Community plugins**, and open the con
 
 The dashboard resolves campaign state from `1-Campaign/DM/Current State of Affairs.md`. It does not infer or choose a next session when `next_session` is absent, null, malformed, or not a positive integer.
 
-The active session room is a separate, explicit plugin-local selection. Selecting it never writes Current State, chooses a lead, establishes chronology, or promotes a draft. The room name must match the selected folder basename so workflow filenames cannot escape the room.
+The active session room is a separate, explicit plugin-local selection. The native chooser lists only existing direct children of `1-Campaign/Sessions`, and the selected folder is revalidated before it is committed, displayed, or used by a workflow. Selecting it never writes Current State, chooses a lead, establishes chronology, or promotes a draft. The room name must match the selected folder basename so workflow filenames cannot escape the room.
 
-RUN generation accepts exactly one of two source-citing evidence authorities: an exact standalone `vcg:declaration <id>` marker in the active room's `<display name> Decision Intake.md`, or the exact `deployment_mode: dm-selected-from-live-handoff` plus one safe scalar `selected_lead` parsed from the same `1-Campaign/DM/Current State of Affairs.md` snapshot. Zero authorities, both authorities, markers inside fenced or indented code, a mismatched source path, incomplete DM fields, or fields that do not match that snapshot fail closed. The DM path is labelled as DM authority and never represented as player wording. The reviewed proposal displays a SHA-256/size/mtime evidence read set and re-reads and re-hashes it after target preflight but before any mutation. The older `declarationEvidence` builder input remains accepted as a player-declaration compatibility path, but cannot be combined with the typed evidence input.
+RUN generation accepts exactly one of two source-citing evidence authorities: an exact standalone `vcg:declaration <id>` marker in the active room's `<display name> Decision Intake.md`, or the exact `deployment_mode: dm-selected-from-live-handoff` plus one safe scalar `selected_lead` parsed from `1-Campaign/DM/Current State of Affairs.md`. A single declaration is unambiguous; multiple declaration markers require exactly one separate standalone `vcg:selection <declaration-id>` marker naming a declaration in that same Decision Intake. Zero authorities, both authorities, duplicate markers, missing or conflicting selection markers, markers inside fenced or indented code, a mismatched source path, incomplete DM fields, or fields that do not match the bound snapshot fail closed. Every RUN binds Current State and derives its latest-played label from that snapshot; the player path additionally binds Decision Intake, while the DM path requires its authority fields to match the same Current State hash. The DM path is labelled as DM authority and never represented as player wording. The reviewed proposal displays the complete SHA-256/size/mtime evidence read set and re-reads and re-hashes it after target preflight but before any mutation. The older `declarationEvidence` builder input remains accepted as a player-declaration compatibility path, but cannot be combined with the typed evidence input and does not bypass the Current State requirement.
 
 See [FEATURE_COVERAGE.md](FEATURE_COVERAGE.md) for the exact implementation status and ownership boundary of all fifty operating upgrades.
 
@@ -60,16 +60,16 @@ Embed a smaller control surface in any note:
 ```vcg-control
 title: Table controls
 subtitle: Navigation and local checks
-actions: open-current-state, open-current-leads, open-dice-tray, run-live-edge-audit
+actions: open-current-state, open-current-leads, open-latest-played, open-session-readiness
 compact: true
 ```
 ````
 
-Only action IDs compiled into [`src/actions.ts`](src/actions.ts) are accepted. Unknown keys, duplicate keys, unknown actions, and empty action lists render as errors.
+Only action IDs compiled with the `block` source in [`src/actions.ts`](src/actions.ts) are accepted. Markdown blocks are limited to 4,096 characters, 64 lines, a 120-character title, a 240-character subtitle, and 12 unique actions. Unknown keys, duplicate keys, unsafe or unknown actions, and empty action lists render as errors.
 
 ## Operating workflow command IDs
 
-These IDs are stable hotkey and control-block targets. Obsidian prefixes command-palette IDs with `veiled-chicago-control-plane:`.
+These IDs are stable command and hotkey targets. Only navigation actions whose compiled `allowedSources` includes `block` may appear in a Markdown control block. Obsidian prefixes command-palette IDs with `veiled-chicago-control-plane:`.
 
 - `open-live-edge-router`
 - `open-command-search`
@@ -109,7 +109,7 @@ python3 9-System/Automation/scripts/vcg_control.py run <fixed-action-id> --json
 
 No shell is involved. The wrapper maintains a second allowlist, accepts no arbitrary command or path, redacts the vault root from stored output, and refuses to stop a map process it cannot prove it owns. The wrapper currently requires macOS/POSIX process tools; other desktop platforms retain the non-process features.
 
-Local automation is disabled by default. Start/stop actions require confirmation by default. Terminal and process actions are never protocol-safe and cannot run through `obsidian://vc-control`.
+Local automation is disabled by default. Start/stop actions require confirmation by default. Terminal, recording, process, external, integration, script, and workflow actions cannot be dispatched from Markdown; terminal and process actions also remain protocol-unsafe and cannot run through `obsidian://vc-control`.
 
 ## Vault hierarchy contract
 

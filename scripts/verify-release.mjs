@@ -52,6 +52,7 @@ for (const file of ["README.md", "main.js", "styles.css", "manifest.json"]) {
 const removedVaultRoots = ["1-DM Toolkit", "1-Party", "1-Session Journals", "2-World-Chicago", "3-Mechanics"];
 for (const file of [
   "README.md",
+  "CONTROL_PLANE_1_4_SPEC.md",
   "main.js",
   "FEATURE_COVERAGE.md",
   "src/actions.ts",
@@ -138,6 +139,7 @@ for (const feature of contractFeatures) {
 
 const mainSource = readFileSync("src/main.ts", "utf8");
 const mainBundle = readFileSync("main.js", "utf8");
+const commandSearchSource = readFileSync("src/command-search.ts", "utf8");
 const companionSource = readFileSync("companion/vcg_control.py", "utf8");
 const operatingSource = readFileSync("src/operating.ts", "utf8");
 const workflowSource = readFileSync("src/workflow-ui.ts", "utf8");
@@ -170,6 +172,37 @@ if (!operatingSource.includes('MANAGED_WRITE_ROOTS') || !operatingSource.include
 }
 if (!actionSource.match(/id: "open-terminal"[\s\S]*?protocolSafe: false/)) {
   errors.push("open-terminal must remain protocol-unsafe");
+}
+if (
+  !actionSource.includes('export type ActionSource = "view" | "block" | "command" | "protocol"') ||
+  !actionSource.includes("allowedSources: readonly ActionSource[]") ||
+  !actionSource.includes("CONTROL_BLOCK_LIMITS") ||
+  !actionSource.includes('allowedSources.includes("block")') ||
+  !mainSource.includes("sourceBlockReason(action, source)")
+) {
+  errors.push("1.4 sources are missing the typed action-source policy or bounded Markdown parser");
+}
+if (
+  !commandSearchSource.includes("getSuggestions(query: string)") ||
+  !commandSearchSource.includes("rankActionsForSearch(this.options.actions, query,")
+) {
+  errors.push("1.4 command search is not wired to query-aware ranking");
+}
+if (
+  !mainSource.includes("class SessionRoomSuggestModal extends FuzzySuggestModal") ||
+  !mainSource.includes("root.children") ||
+  !mainSource.includes("selectExistingSessionRoom") ||
+  !mainSource.includes("folder instanceof TFolder")
+) {
+  errors.push("1.4 sources are missing native existing-folder session selection and revalidation");
+}
+if (
+  !operatingSource.includes("selectionMarkerIds") ||
+  !operatingSource.includes("Multiple player declarations require exactly one explicit standalone vcg:selection marker") ||
+  !operatingSource.includes("currentStateEvidence: CurrentStateRunEvidence") ||
+  !operatingSource.includes("DM selection evidence must match the bound Current State evidence snapshot")
+) {
+  errors.push("1.4 sources are missing snapshot-complete RUN evidence or explicit multi-declaration selection");
 }
 if (!actionSource.match(/id: "open-omnisearch"[\s\S]*?target: "omnisearch:show-modal"/)) {
   errors.push("open-omnisearch must remain bound to the verified fixed Omnisearch command");

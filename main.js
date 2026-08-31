@@ -1002,16 +1002,38 @@ var ACTION_NAVIGATION = {
   "start-map-server": { route: "system", verb: "START", keywords: ["process", "vite", "loopback"] },
   "stop-map-server": { route: "system", verb: "STOP", keywords: ["process", "vite", "loopback"] }
 };
+var MARKDOWN_SAFE_ACTION_KINDS = /* @__PURE__ */ new Set(["view", "note", "dynamic-note"]);
+function allowedSourcesForAction(action) {
+  const sources = ["view", "command"];
+  if (MARKDOWN_SAFE_ACTION_KINDS.has(action.kind)) sources.push("block");
+  if (action.protocolSafe === true) sources.push("protocol");
+  return sources;
+}
 var CONTROL_ACTIONS = BASE_CONTROL_ACTIONS.map((action) => ({
   ...action,
-  ...ACTION_NAVIGATION[action.id]
+  ...ACTION_NAVIGATION[action.id],
+  allowedSources: allowedSourcesForAction(action)
 }));
 validateActionNavigation(CONTROL_ACTIONS);
 var ACTION_BY_ID = new Map(CONTROL_ACTIONS.map((action) => [action.id, action]));
 var CONTROL_BLOCK_KEYS = /* @__PURE__ */ new Set(["title", "subtitle", "actions", "compact"]);
+var CONTROL_BLOCK_LIMITS = {
+  sourceCharacters: 4096,
+  lines: 64,
+  titleCharacters: 120,
+  subtitleCharacters: 240,
+  actions: 12
+};
 function parseControlBlock(source) {
+  if (source.length > CONTROL_BLOCK_LIMITS.sourceCharacters) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.sourceCharacters} characters.`);
+  }
+  const lines = source.split(/\r?\n/);
+  if (lines.length > CONTROL_BLOCK_LIMITS.lines) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.lines} lines.`);
+  }
   const values = /* @__PURE__ */ new Map();
-  for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
+  for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const separator = line.indexOf(":");
@@ -1024,12 +1046,28 @@ function parseControlBlock(source) {
   }
   const actionIds = (values.get("actions") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   if (actionIds.length === 0) throw new Error("At least one allowlisted action is required.");
+  if (actionIds.length > CONTROL_BLOCK_LIMITS.actions) {
+    throw new Error(`Control blocks are limited to ${CONTROL_BLOCK_LIMITS.actions} actions.`);
+  }
+  if (new Set(actionIds).size !== actionIds.length) throw new Error("Control block actions must be unique.");
   const unknown = actionIds.filter((id) => !ACTION_BY_ID.has(id));
   if (unknown.length > 0) throw new Error(`Unknown action: ${unknown.join(", ")}`);
+  const sourceBlocked = actionIds.filter((id) => !ACTION_BY_ID.get(id)?.allowedSources.includes("block"));
+  if (sourceBlocked.length > 0) {
+    throw new Error(`Action is not permitted from Markdown: ${sourceBlocked.join(", ")}`);
+  }
+  const title = values.get("title") || "Veiled Chicago controls";
+  const subtitle = values.get("subtitle") || "Allowlisted vault actions";
+  if (title.length > CONTROL_BLOCK_LIMITS.titleCharacters) {
+    throw new Error(`Control block titles are limited to ${CONTROL_BLOCK_LIMITS.titleCharacters} characters.`);
+  }
+  if (subtitle.length > CONTROL_BLOCK_LIMITS.subtitleCharacters) {
+    throw new Error(`Control block subtitles are limited to ${CONTROL_BLOCK_LIMITS.subtitleCharacters} characters.`);
+  }
   return {
-    title: values.get("title") || "Veiled Chicago controls",
-    subtitle: values.get("subtitle") || "Allowlisted vault actions",
-    actions: [...new Set(actionIds)],
+    title,
+    subtitle,
+    actions: actionIds,
     compact: /^(?:true|yes|1)$/i.test(values.get("compact") ?? "false")
   };
 }
@@ -1095,6 +1133,12 @@ var ControlActionSearchModal = class extends import_obsidian.FuzzySuggestModal {
       favoriteActionIds: this.options.favoriteActionIds,
       recentActions: this.options.recentActions
     }).map(({ action }) => action);
+  }
+  getSuggestions(query) {
+    return rankActionsForSearch(this.options.actions, query, {
+      favoriteActionIds: this.options.favoriteActionIds,
+      recentActions: this.options.recentActions
+    }).map(({ action, score }) => ({ item: action, match: { score, matches: [] } }));
   }
   getItemText(action) {
     return buildActionSearchText(action, {
@@ -1686,7 +1730,7 @@ function fenceClosingLine(line, fence) {
   }
   return remainder;
 }
-function declarationMarkerIds(contents) {
+function evidenceMarkerIds(contents, kind) {
   const ids = [];
   let fence = null;
   for (const line of contents.split(/\r?\n/)) {
@@ -1703,11 +1747,17 @@ function declarationMarkerIds(contents) {
       continue;
     }
     const marker = line.match(
-      /^<!--\s*vcg:declaration\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*-->[ \t]*$/
+      kind === "declaration" ? /^<!--\s*vcg:declaration\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*-->[ \t]*$/ : /^<!--\s*vcg:selection\s+([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\s*-->[ \t]*$/
     );
     if (marker?.[1]) ids.push(marker[1]);
   }
   return ids;
+}
+function declarationMarkerIds(contents) {
+  return evidenceMarkerIds(contents, "declaration");
+}
+function selectionMarkerIds(contents) {
+  return evidenceMarkerIds(contents, "selection");
 }
 function selectedLeadIdentifier(value) {
   if (typeof value !== "string") {
@@ -1741,6 +1791,21 @@ function strictFrontmatterScalar(contents, key) {
     return [];
   });
   return values.length === 1 ? values[0] ?? null : null;
+}
+function resolveCurrentStateRunEvidence(evidence) {
+  const sourcePath = normalizeVaultPath(evidence.sourcePath);
+  if (sourcePath !== evidence.sourcePath || sourcePath !== VAULT_PATHS.currentState) {
+    throw new Error(`RUN Current State evidence must come from ${VAULT_PATHS.currentState}.`);
+  }
+  if (!evidence.contents.trim()) throw new Error("RUN generation requires a non-empty Current State evidence snapshot.");
+  const latestPlayedRecord = strictFrontmatterScalar(evidence.contents, "last_played_record");
+  const match = latestPlayedRecord?.match(/^\[\[([^|\]#]+)(?:#[^|\]]*)?(?:\|([^\]]+))?\]\]$/);
+  const target = match?.[1]?.trim();
+  const label = match?.[2]?.trim() || target?.split("/").pop()?.replace(/\.md$/i, "").trim();
+  if (!target || !label) {
+    throw new Error("RUN generation requires one exact last_played_record wikilink in Current State.");
+  }
+  return { sourcePath, sourceContentHash: contentHash(evidence.contents), latestPlayedLabel: label };
 }
 function normalizeNoteTitle(value) {
   const title = inlineText(value, "Title");
@@ -2072,11 +2137,13 @@ function buildSessionRoomProposal(input) {
       contents: sessionFrontmatter(`${displayName} Control Room`, input.createdDate, ["Category/Session-Control"]) + `# ${displayName} Control Room
 
 \`\`\`vcg-control
-title: Session operations
-subtitle: Explicit, review-gated workflow actions
-actions: capture-player-declaration, open-session-preflight, generate-session-run, open-session-readiness, capture-live-event, open-promotion-review
+title: Session references
+subtitle: Read-only navigation from note content
+actions: open-current-state, open-current-leads, open-session-preflight, open-session-readiness, open-promotion-review
 compact: false
 \`\`\`
+
+> Execute capture, generation, recording, process, and proposal workflows only from the first-party Control Plane or Obsidian command palette. Markdown controls are navigation-only.
 
 ## Current focus
 
@@ -2092,6 +2159,8 @@ compact: false
       contents: sessionFrontmatter(`${displayName} Decision Intake`, input.createdDate, ["Category/Decision-Intake"]) + `# ${displayName} Decision Intake
 
 > Player wording is append-only evidence. Corrections add a new entry; they do not replace the original. A DM-selected live-handoff authority remains in Current State and is never copied here as player intent.
+
+When more than one standalone declaration marker exists, RUN generation requires exactly one separate standalone selection marker naming the chosen declaration ID. The marker shape is \`vcg:selection <declaration-id>\` inside an HTML comment; examples inside code fences do not count.
 
 ## Declarations
 
@@ -2128,9 +2197,9 @@ _No declaration recorded._
       contents: sessionFrontmatter(`${displayName} Readiness Board`, input.createdDate, ["Category/Session-Readiness"]) + `# ${displayName} Readiness Board
 
 - [ ] Exactly one supported selection-evidence authority exists
-- [ ] Player path has a verbatim declaration marker, or DM path has the exact Current State deployment mode and selected lead
+- [ ] Player path has a verbatim declaration marker and, when multiple declarations exist, exactly one standalone selection marker; or DM path has the exact Current State deployment mode and selected lead
 - [ ] Preflight is complete
-- [ ] Draft RUN cites its selection authority and current-state sources
+- [ ] Draft RUN cites its selection authority, Decision Intake when applicable, and Current State snapshot
 - [ ] Map / fallback contract is ready
 - [ ] Player-facing surfaces pass the audience gate
 - [ ] Recording consent and retention are documented
@@ -2341,18 +2410,35 @@ function resolveRunSelectionEvidence(input) {
       throw new Error(`Player-declaration evidence must come from the active room Decision Intake: ${expectedPath}`);
     }
     const declarationIds = declarationMarkerIds(candidate.contents);
-    const declarationId = declarationIds.at(-1);
-    if (!declarationId) {
+    if (declarationIds.length === 0) {
       if (legacyEvidenceSupplied) {
         throw new Error("RUN generation is blocked until declaration evidence exists in Decision Intake.");
       }
       throw new Error("Player-declaration selection evidence requires an exact standalone vcg:declaration marker.");
     }
+    if (new Set(declarationIds).size !== declarationIds.length) {
+      throw new Error("Player-declaration evidence contains duplicate declaration markers.");
+    }
+    const selectionIds = selectionMarkerIds(candidate.contents);
+    if (selectionIds.length > 1) {
+      throw new Error("Player-declaration evidence requires at most one standalone vcg:selection marker.");
+    }
+    const selectionMarkerId = selectionIds[0] ?? null;
+    if (declarationIds.length > 1 && !selectionMarkerId) {
+      throw new Error(
+        "Multiple player declarations require exactly one explicit standalone vcg:selection marker."
+      );
+    }
+    const declarationId = selectionMarkerId ?? declarationIds[0];
+    if (!declarationId || !declarationIds.includes(declarationId)) {
+      throw new Error("The standalone vcg:selection marker must name a declaration marker in the same Decision Intake.");
+    }
     return {
       authority: candidate.authority,
       sourcePath,
       sourceContentHash: contentHash(candidate.contents),
-      declarationId
+      declarationId,
+      selectionMarkerId
     };
   }
   if (sourcePath !== VAULT_PATHS.currentState) {
@@ -2385,7 +2471,9 @@ function runSelectionEvidenceMarkdown(evidence) {
 - **Evidence source:** [[${evidence.sourcePath}]]
 - **Evidence snapshot:** SHA-256 \`${evidence.sourceContentHash}\`
 - **Evidence marker:** \`vcg:declaration ${evidence.declarationId}\`
-- **Player wording:** copy the reviewed verbatim statement here
+` + (evidence.selectionMarkerId ? `- **Selection marker:** \`vcg:selection ${evidence.selectionMarkerId}\`
+` : `- **Selection marker:** not required; the Decision Intake contains exactly one declaration
+`) + `- **Player wording:** copy the reviewed verbatim statement here
 - **Selected lead:** do not infer; derive only from the reviewed declaration
 `;
   }
@@ -2400,12 +2488,16 @@ function runSelectionEvidenceMarkdown(evidence) {
 function buildRunProposal(input) {
   const roomPath = normalizeSessionRoomPath(input.roomPath);
   const displayName = normalizeSessionDisplayName(roomPath, input.displayName);
+  const currentStateEvidence = resolveCurrentStateRunEvidence(input.currentStateEvidence);
   const selectionEvidence = resolveRunSelectionEvidence({
     roomPath,
     displayName,
     selectionEvidence: input.selectionEvidence,
     declarationEvidence: input.declarationEvidence
   });
+  if (selectionEvidence.authority === "dm-selected-from-live-handoff" && selectionEvidence.sourceContentHash !== currentStateEvidence.sourceContentHash) {
+    throw new Error("DM selection evidence must match the bound Current State evidence snapshot.");
+  }
   const title = `${displayName} RUN`;
   const path = `${roomPath}/${title}.md`;
   const contents = sessionFrontmatter(title, input.createdDate, ["Category/Session-Prep"]) + `# ${title}
@@ -2415,7 +2507,9 @@ function buildRunProposal(input) {
 
 ## Selection authority and evidence
 
-- **Latest played record:** ${inlineText(input.latestPlayedLabel, "Latest played label")}
+- **Latest played record:** ${inlineText(currentStateEvidence.latestPlayedLabel, "Latest played label")}
+- **Current State source:** [[${currentStateEvidence.sourcePath}]]
+- **Current State snapshot:** SHA-256 \`${currentStateEvidence.sourceContentHash}\`
 ${runSelectionEvidenceMarkdown(selectionEvidence)}- **Current-state facts used:** <!-- add citations -->
 - **Exact gaps and safe fallbacks:** <!-- document gaps -->
 - **Source modules opened for parts:** <!-- list source modules -->
@@ -2454,6 +2548,12 @@ ${runSelectionEvidenceMarkdown(selectionEvidence)}- **Current-state facts used:*
 | Costly / partial |  |  |
 | Refusal / departure |  |  |
 `;
+  const evidenceSources = [
+    { path: currentStateEvidence.sourcePath, contentHash: currentStateEvidence.sourceContentHash }
+  ];
+  if (selectionEvidence.sourcePath !== currentStateEvidence.sourcePath) {
+    evidenceSources.push({ path: selectionEvidence.sourcePath, contentHash: selectionEvidence.sourceContentHash });
+  }
   const proposal = {
     id: input.proposalId,
     title: `Generate draft ${title}`,
@@ -2461,7 +2561,7 @@ ${runSelectionEvidenceMarkdown(selectionEvidence)}- **Current-state facts used:*
     phase: "propose",
     canonImpact: "candidate-only",
     operations: [{ kind: "create", path, contents }],
-    evidenceSources: [{ path: selectionEvidence.sourcePath, contentHash: selectionEvidence.sourceContentHash }]
+    evidenceSources
   };
   validateProposal(proposal);
   return proposal;
@@ -2993,6 +3093,42 @@ var ConfirmActionModal = class extends import_obsidian3.Modal {
   onClose() {
     this.onDismiss(this.confirmed);
     this.contentEl.empty();
+  }
+};
+var SessionRoomSuggestModal = class extends import_obsidian3.FuzzySuggestModal {
+  constructor(app, choices, onChoose, onDismiss) {
+    super(app);
+    this.choices = choices;
+    this.onChoose = onChoose;
+    this.onDismiss = onDismiss;
+    this.setPlaceholder("Select an existing session folder\u2026");
+    this.setInstructions([
+      { command: "\u2191\u2193", purpose: "navigate" },
+      { command: "\u21B5", purpose: "select existing folder" },
+      { command: "esc", purpose: "close" }
+    ]);
+  }
+  onOpen() {
+    super.onOpen();
+    this.modalEl.addClass("vc-control-session-room-modal");
+    this.inputEl.setAttr("aria-label", "Select an existing direct-child session folder");
+  }
+  getItems() {
+    return [...this.choices];
+  }
+  getItemText(choice) {
+    return `${choice.displayName} ${choice.roomPath}`;
+  }
+  renderSuggestion({ item: choice }, element) {
+    element.createEl("strong", { text: choice.displayName });
+    element.createEl("small", { text: choice.roomPath });
+  }
+  onChooseItem(choice) {
+    this.onChoose(choice);
+  }
+  onClose() {
+    super.onClose();
+    this.onDismiss();
   }
 };
 var ControlPlaneView = class extends import_obsidian3.ItemView {
@@ -3818,12 +3954,16 @@ var ControlPlaneSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.setActiveContextProfile(value);
       });
     });
+    const activeSession = this.plugin.activeSession();
+    const hasStoredSession = Boolean(
+      this.plugin.settings.activeSessionRoom || this.plugin.settings.activeSessionName
+    );
     new import_obsidian3.Setting(containerEl).setName("Explicit active session room").setDesc(
-      this.plugin.settings.activeSessionRoom ? `${this.plugin.settings.activeSessionName ?? "Session room"}: ${this.plugin.settings.activeSessionRoom}` : "Not selected. The plugin will not infer a room from filenames or next_session."
+      activeSession ? `${activeSession.displayName}: ${activeSession.roomPath}` : hasStoredSession ? "Stored selection is unavailable or no longer an existing direct-child session folder. Select another room or clear it." : "Not selected. The plugin will not infer a room from filenames or next_session."
     ).addButton(
       (button) => button.setButtonText("Select").onClick(() => void this.plugin.executeAction("set-active-session-room", "command"))
     ).addButton(
-      (button) => button.setButtonText("Clear").setDisabled(!this.plugin.settings.activeSessionRoom).onClick(async () => {
+      (button) => button.setButtonText("Clear").setDisabled(!hasStoredSession).onClick(async () => {
         this.plugin.settings.activeSessionRoom = null;
         this.plugin.settings.activeSessionName = null;
         await this.plugin.saveSettings();
@@ -3917,6 +4057,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   pendingWorkflowModals = /* @__PURE__ */ new Set();
   pendingProposalModals = /* @__PURE__ */ new Set();
   pendingCommandSearchModals = /* @__PURE__ */ new Set();
+  pendingSessionRoomModals = /* @__PURE__ */ new Set();
   commandSearchRefreshPending = false;
   activationPromise = null;
   entityIndex = null;
@@ -3974,16 +4115,23 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       this.registerEvent(
         this.app.vault.on("create", (file) => {
           if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+          if (file.parent?.path === VAULT_PATHS.sessionsRoot) this.scheduleRefresh();
         })
       );
       this.registerEvent(
         this.app.vault.on("delete", (file) => {
           if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+          if (file.path === this.settings.activeSessionRoom || file.parent?.path === VAULT_PATHS.sessionsRoot) {
+            this.scheduleRefresh();
+          }
         })
       );
       this.registerEvent(
         this.app.vault.on("rename", (file, oldPath) => {
           if (this.isEntityScopePath(file.path) || this.isEntityScopePath(oldPath)) this.invalidateEntityIndex();
+          if (oldPath === this.settings.activeSessionRoom || file.path === this.settings.activeSessionRoom || file.parent?.path === VAULT_PATHS.sessionsRoot || oldPath.startsWith(`${VAULT_PATHS.sessionsRoot}/`)) {
+            this.scheduleRefresh();
+          }
         })
       );
       this.scheduleRefresh(0);
@@ -4001,6 +4149,8 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     this.pendingProposalModals.clear();
     for (const modal of this.pendingCommandSearchModals) modal.close();
     this.pendingCommandSearchModals.clear();
+    for (const modal of this.pendingSessionRoomModals) modal.close();
+    this.pendingSessionRoomModals.clear();
     this.commandSearchRefreshPending = false;
     for (const child of this.activeChildren) {
       if (!child.killed) child.kill("SIGTERM");
@@ -4200,6 +4350,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     const latestTarget = wikilinkTarget(latestValue);
     const latestFile = latestTarget ? this.app.metadataCache.getFirstLinkpathDest(latestTarget, CURRENT_STATE_PATH) : null;
     const nextSession = parseExplicitNextSession(frontmatter2.next_session);
+    const active = this.activeSession();
     return {
       latestLabel: wikilinkLabel(latestValue) || latestFile?.basename || "UNRESOLVED",
       latestFile,
@@ -4207,8 +4358,8 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       deploymentMode: normalizeDeployment(frontmatter2.deployment_mode),
       openLeadTasks: await this.countOpenTasks(CURRENT_LEADS_PATH),
       stateModified: stateFile?.stat.mtime ?? null,
-      activeSessionRoom: this.settings.activeSessionRoom,
-      activeSessionName: this.settings.activeSessionName
+      activeSessionRoom: active?.roomPath ?? null,
+      activeSessionName: active?.displayName ?? null
     };
   }
   async countOpenTasks(path) {
@@ -4339,7 +4490,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         if (["create-managed-note", "capture-quick-inbox", "set-active-session-room"].includes(action.id)) {
           return { available: true };
         }
-        return this.settings.activeSessionRoom && this.settings.activeSessionName ? { available: true } : { available: false, reason: "Select an explicit active session room first." };
+        return this.activeSession() ? { available: true } : { available: false, reason: "Select an explicit active session room first." };
       case "script":
         if (!this.settings.automationEnabled) return { available: false, reason: "Local automation is disabled in plugin settings." };
         if (!import_obsidian3.Platform.isMacOS) {
@@ -4361,11 +4512,11 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       new import_obsidian3.Notice(`Veiled Chicago Control Plane: unknown action '${actionId || "(empty)"}'.`);
       return;
     }
-    const protocolBlock = this.protocolBlockReason(action, source);
-    if (protocolBlock) {
-      new import_obsidian3.Notice(protocolBlock);
+    const sourceBlock = this.sourceBlockReason(action, source);
+    if (sourceBlock) {
+      new import_obsidian3.Notice(sourceBlock);
       await this.tryRecordRecentAction(action.id, false);
-      this.announceToViews(`${action.title} was blocked by protocol policy.`);
+      this.announceToViews(`${action.title} was blocked by action-source policy.`);
       return;
     }
     const availability = this.getAvailability(action);
@@ -4382,9 +4533,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         action.confirm,
         () => {
           if (this.unloading) return;
-          const currentProtocolBlock = this.protocolBlockReason(action, source);
-          if (currentProtocolBlock) {
-            new import_obsidian3.Notice(currentProtocolBlock);
+          const currentSourceBlock = this.sourceBlockReason(action, source);
+          if (currentSourceBlock) {
+            new import_obsidian3.Notice(currentSourceBlock);
             void this.tryRecordRecentAction(action.id, false);
             return;
           }
@@ -4596,7 +4747,15 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
   }
   activeSession() {
     if (!this.settings.activeSessionRoom || !this.settings.activeSessionName) return null;
-    return { roomPath: this.settings.activeSessionRoom, displayName: this.settings.activeSessionName };
+    try {
+      const roomPath = normalizeSessionRoomPath(this.settings.activeSessionRoom);
+      const displayName = normalizeSessionDisplayName(roomPath, this.settings.activeSessionName);
+      const folder = this.app.vault.getAbstractFileByPath(roomPath);
+      if (!(folder instanceof import_obsidian3.TFolder) || folder.name !== displayName) return null;
+      return { roomPath, displayName };
+    } catch {
+      return null;
+    }
   }
   async executeWorkflow(id) {
     switch (id) {
@@ -4692,39 +4851,49 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     );
   }
   openSessionRoomSelector() {
-    const active = this.activeSession();
-    this.openWorkflowModal(
-      "Select active session room",
-      "This registry is plugin-local. It does not modify next_session, select a lead, establish chronology, or promote prep.",
-      [
-        {
-          id: "path",
-          label: "Vault-relative room path",
-          type: "text",
-          required: true,
-          placeholder: `${VAULT_PATHS.sessionsRoot}/Session 9`,
-          value: active?.roomPath ?? `${VAULT_PATHS.sessionsRoot}/`
-        },
-        {
-          id: "name",
-          label: "Display name",
-          type: "text",
-          required: true,
-          placeholder: "Session 9",
-          value: active?.displayName ?? ""
-        }
-      ],
-      "Select room",
-      async (values) => {
-        const roomPath = normalizeSessionRoomPath(stringValue(values, "path"));
-        const displayName = normalizeSessionDisplayName(roomPath, stringValue(values, "name"));
-        this.settings.activeSessionRoom = roomPath;
-        this.settings.activeSessionName = displayName;
-        await this.saveSettings();
-        await this.refreshViews();
-        new import_obsidian3.Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7e3);
+    const root = this.app.vault.getAbstractFileByPath(VAULT_PATHS.sessionsRoot);
+    if (!(root instanceof import_obsidian3.TFolder)) {
+      new import_obsidian3.Notice(`Sessions root is unavailable: ${VAULT_PATHS.sessionsRoot}`, 7e3);
+      return;
+    }
+    const choices = root.children.flatMap((child) => {
+      if (!(child instanceof import_obsidian3.TFolder)) return [];
+      try {
+        const roomPath = normalizeSessionRoomPath(child.path);
+        return [{ roomPath, displayName: normalizeSessionDisplayName(roomPath, child.name) }];
+      } catch {
+        return [];
       }
+    }).sort((left, right) => left.displayName.localeCompare(right.displayName, "en-US", { numeric: true }));
+    if (choices.length === 0) {
+      new import_obsidian3.Notice(`No selectable direct-child folders exist below ${VAULT_PATHS.sessionsRoot}.`, 7e3);
+      return;
+    }
+    let modal;
+    modal = new SessionRoomSuggestModal(
+      this.app,
+      choices,
+      (choice) => {
+        void this.selectExistingSessionRoom(choice).catch((error) => this.reportActionError("Select active session room", error));
+      },
+      () => this.pendingSessionRoomModals.delete(modal)
     );
+    this.pendingSessionRoomModals.add(modal);
+    modal.open();
+  }
+  async selectExistingSessionRoom(choice) {
+    const folder = this.app.vault.getAbstractFileByPath(choice.roomPath);
+    if (!(folder instanceof import_obsidian3.TFolder)) throw new Error("The selected session folder no longer exists.");
+    const roomPath = normalizeSessionRoomPath(folder.path);
+    const displayName = normalizeSessionDisplayName(roomPath, folder.name);
+    if (roomPath !== choice.roomPath || displayName !== choice.displayName) {
+      throw new Error("The selected session folder changed before selection was committed.");
+    }
+    this.settings.activeSessionRoom = roomPath;
+    this.settings.activeSessionName = displayName;
+    await this.saveSettings();
+    await this.refreshViews();
+    new import_obsidian3.Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7e3);
   }
   proposeSessionScaffold() {
     const active = this.requireActiveSession();
@@ -4797,7 +4966,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
       intake ? this.app.vault.read(intake) : Promise.resolve(null),
       currentState ? this.app.vault.read(currentState) : Promise.resolve(null)
     ]);
-    const live = await this.readLiveState();
+    if (currentStateContents === null) throw new Error(`RUN generation requires ${CURRENT_STATE_PATH}.`);
     const selectionEvidence = collectRunSelectionEvidence({
       roomPath: active.roomPath,
       displayName: active.displayName,
@@ -4809,7 +4978,7 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
         roomPath: active.roomPath,
         displayName: active.displayName,
         selectionEvidence,
-        latestPlayedLabel: live.latestLabel,
+        currentStateEvidence: { sourcePath: CURRENT_STATE_PATH, contents: currentStateContents },
         createdDate: this.today(),
         proposalId: this.proposalId("run")
       })
@@ -5340,12 +5509,9 @@ var VeiledChicagoControlPlane = class extends import_obsidian3.Plugin {
     if (value === null) element.removeAttribute(name);
     else element.setAttribute(name, value);
   }
-  protocolBlockReason(action, source) {
-    if (source !== "protocol") return null;
-    if (!action.protocolSafe) {
-      return "Veiled Chicago Control Plane blocked an action that is not protocol-safe.";
-    }
-    return null;
+  sourceBlockReason(action, source) {
+    if (action.allowedSources.includes(source)) return null;
+    return `Veiled Chicago Control Plane blocked ${action.title} from the ${source} action source.`;
   }
   redactLocalOutput(value) {
     const adapter = this.app.vault.adapter;

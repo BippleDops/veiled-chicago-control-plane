@@ -26,17 +26,17 @@ Status vocabulary:
 | 13 | CAP-03 | Typed entity forms | Plugin delivered | NPC, location, faction, item, clue, ruling, player knowledge, research, and correction schemas. |
 | 14 | CAP-04 | Canonical owner and link picker | Future implementation | No automatic relationship or reciprocal-link writes are claimed. |
 | 15 | CAP-05 | Daily operational cockpit | Vault/theme companion | Core Daily Notes configuration belongs to the vault. |
-| 16 | CAP-06 | Fixed Obsidian URI captures | Guarded contract | `vc-control` accepts only compiled action IDs; write workflows still require the in-app review modal. |
+| 16 | CAP-06 | Fixed Obsidian URI captures | Guarded contract | Every action compiles typed `allowedSources`; protocol and dispatch guards fail closed, while bounded Markdown controls expose navigation-only actions and no workflows, commands, integrations, external URLs, recording, processes, or scripts. |
 | 17 | CAP-07 | Allowlisted Obsidian CLI adapter | Guarded contract | Existing fixed Python wrapper remains allowlisted; arbitrary CLI text is not accepted. |
 | 18 | CAP-08 | Research capture with Web Clipper | Vault/theme companion | `research` schema supplies a safe destination; browser capture configuration remains in the vault. |
 | 19 | CAP-09 | Media and document intake | Guarded contract | `propose-local-transcription` accepts an explicit vault audio selection and consent, then creates a receipt only. |
 | 20 | CAP-10 | Transactional creation engine | Plugin delivered | Preview-bound kind/hash/size/mtime baselines, all-target preflight, atomic append recheck, safe rollback, and local receipts. |
-| 21 | SESSION-01 | Active session-room registry | Plugin delivered | Explicit plugin-local `activeSessionRoom` and `activeSessionName`; never writes `next_session`. |
+| 21 | SESSION-01 | Active session-room registry | Plugin delivered | Native fuzzy chooser lists only existing direct-child session folders; selection and every later use revalidate the exact `TFolder`, while plugin-local state never writes `next_session`. |
 | 22 | SESSION-02 | Session workspace scaffolder | Plugin delivered | `scaffold-active-session-room` previews only missing files from the seven-note draft/future contract; existing files remain untouched. |
 | 23 | SESSION-03 | Preflight wizard | Plugin delivered | Scaffolded Preflight checklist and `open-session-preflight`. |
-| 24 | SESSION-04 | Verbatim declaration capture | Plugin delivered | `capture-player-declaration` appends immutable evidence markers and wording. |
+| 24 | SESSION-04 | Verbatim declaration capture | Plugin delivered | `capture-player-declaration` appends immutable evidence markers and wording; multiple declarations require one separate standalone selector before RUN generation. |
 | 25 | SESSION-05 | Bounded session context pack | Guarded contract | `session-live` profile defines roots/scopes; retrieval implementation must enforce it before model context. |
-| 26 | SESSION-06 | Evidence-gated RUN generator | Plugin delivered | `generate-session-run` requires exactly one source-citing authority: a standalone non-code `vcg:declaration` marker in the active Decision Intake or exact same-snapshot Current State `dm-selected-from-live-handoff` plus a scalar `selected_lead`; zero, invalid, ambiguous, or changed evidence fails closed. |
+| 26 | SESSION-06 | Evidence-gated RUN generator | Plugin delivered | `generate-session-run` always binds Current State, additionally binds Decision Intake for player authority, requires one standalone `vcg:selection` marker when multiple declarations exist, and requires DM authority fields to match the same Current State snapshot; zero, invalid, ambiguous, incomplete, or changed evidence fails closed. |
 | 27 | SESSION-07 | Readiness board and table launcher | Plugin delivered | Fail-closed Readiness Board and `open-session-readiness`; workspace launch remains vault-owned. |
 | 28 | SESSION-08 | Append-only live event capture | Plugin delivered | `capture-live-event` records actor, event, status, audience, witnesses, timestamp, and event ID. |
 | 29 | SESSION-09 | Consent-aware audio and transcript pipeline | Guarded contract | Confirmed native Audio Recorder start plus explicit audio picker, consent gate, retention field, and fixed-runtime receipt; no background or implicit transcription. |
@@ -54,7 +54,7 @@ Status vocabulary:
 | 41 | GOV-01 | Observe / Propose / Execute broker | Plugin delivered | Compiled policy, proposal-only AI boundary, exact preview, and explicit execute confirmation. |
 | 42 | GOV-02 | Hardened REST/MCP bridge | Guarded contract | The plugin does not manage REST credentials or listeners; deployment hardening remains an external prerequisite. |
 | 43 | GOV-03 | Local-model security perimeter | Guarded contract | Health UI documents loopback-only contract without background probing or network egress. |
-| 44 | GOV-04 | Physical and desktop command surfaces | Guarded contract | Fifty-six stable Obsidian command IDs, grouped route controls, command search, and fixed native/retrieval adapters are available for reviewed desktop bindings. |
+| 44 | GOV-04 | Physical and desktop command surfaces | Guarded contract | Fifty-six stable Obsidian command IDs, query-ranked native command search, grouped route controls, and fixed native/retrieval adapters are available for reviewed desktop bindings. |
 | 45 | GOV-05 | Calendar and task bridge | Future implementation | Requires a separately reviewed n8n workflow and constrained endpoint. |
 | 46 | GOV-06 | D&D Beyond provenance snapshots | Future implementation | No undocumented API or scraping behavior is bundled. |
 | 47 | GOV-07 | Map, combat, dice, and handout adapters | Plugin delivered | Fixed installed-command IDs, loopback map URL validation, and allowlisted map lifecycle actions. |

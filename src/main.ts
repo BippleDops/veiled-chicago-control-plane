@@ -2,6 +2,7 @@ import {
   App,
   FileView,
   FileSystemAdapter,
+  FuzzySuggestModal,
   ItemView,
   MarkdownRenderer,
   MarkdownView,
@@ -14,6 +15,7 @@ import {
   setIcon,
   TFile,
   TFolder,
+  type FuzzyMatch,
   WorkspaceLeaf
 } from "obsidian";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -25,6 +27,7 @@ import {
   MANAGED_PROFILE_CLASSES,
   parseControlBlock,
   profilesForPath,
+  type ActionSource,
   type ControlAction
 } from "./actions";
 import { ControlActionSearchModal } from "./command-search";
@@ -158,6 +161,11 @@ interface HealthCheck {
 interface Availability {
   available: boolean;
   reason?: string;
+}
+
+interface SessionRoomChoice {
+  roomPath: string;
+  displayName: string;
 }
 
 interface CommandManagerCompat {
@@ -356,6 +364,51 @@ class ConfirmActionModal extends Modal {
   onClose(): void {
     this.onDismiss(this.confirmed);
     this.contentEl.empty();
+  }
+}
+
+class SessionRoomSuggestModal extends FuzzySuggestModal<SessionRoomChoice> {
+  constructor(
+    app: App,
+    private readonly choices: readonly SessionRoomChoice[],
+    private readonly onChoose: (choice: SessionRoomChoice) => void,
+    private readonly onDismiss: () => void
+  ) {
+    super(app);
+    this.setPlaceholder("Select an existing session folder…");
+    this.setInstructions([
+      { command: "↑↓", purpose: "navigate" },
+      { command: "↵", purpose: "select existing folder" },
+      { command: "esc", purpose: "close" }
+    ]);
+  }
+
+  onOpen(): void {
+    super.onOpen();
+    this.modalEl.addClass("vc-control-session-room-modal");
+    this.inputEl.setAttr("aria-label", "Select an existing direct-child session folder");
+  }
+
+  getItems(): SessionRoomChoice[] {
+    return [...this.choices];
+  }
+
+  getItemText(choice: SessionRoomChoice): string {
+    return `${choice.displayName} ${choice.roomPath}`;
+  }
+
+  renderSuggestion({ item: choice }: FuzzyMatch<SessionRoomChoice>, element: HTMLElement): void {
+    element.createEl("strong", { text: choice.displayName });
+    element.createEl("small", { text: choice.roomPath });
+  }
+
+  onChooseItem(choice: SessionRoomChoice): void {
+    this.onChoose(choice);
+  }
+
+  onClose(): void {
+    super.onClose();
+    this.onDismiss();
   }
 }
 
@@ -1274,12 +1327,18 @@ class ControlPlaneSettingTab extends PluginSettingTab {
         });
       });
 
+    const activeSession = this.plugin.activeSession();
+    const hasStoredSession = Boolean(
+      this.plugin.settings.activeSessionRoom || this.plugin.settings.activeSessionName
+    );
     new Setting(containerEl)
       .setName("Explicit active session room")
       .setDesc(
-        this.plugin.settings.activeSessionRoom
-          ? `${this.plugin.settings.activeSessionName ?? "Session room"}: ${this.plugin.settings.activeSessionRoom}`
-          : "Not selected. The plugin will not infer a room from filenames or next_session."
+        activeSession
+          ? `${activeSession.displayName}: ${activeSession.roomPath}`
+          : hasStoredSession
+            ? "Stored selection is unavailable or no longer an existing direct-child session folder. Select another room or clear it."
+            : "Not selected. The plugin will not infer a room from filenames or next_session."
       )
       .addButton((button) =>
         button.setButtonText("Select").onClick(() => void this.plugin.executeAction("set-active-session-room", "command"))
@@ -1287,7 +1346,7 @@ class ControlPlaneSettingTab extends PluginSettingTab {
       .addButton((button) =>
         button
           .setButtonText("Clear")
-          .setDisabled(!this.plugin.settings.activeSessionRoom)
+          .setDisabled(!hasStoredSession)
           .onClick(async () => {
             this.plugin.settings.activeSessionRoom = null;
             this.plugin.settings.activeSessionName = null;
@@ -1401,6 +1460,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
   private readonly pendingWorkflowModals = new Set<WorkflowFormModal>();
   private readonly pendingProposalModals = new Set<ProposalReviewModal>();
   private readonly pendingCommandSearchModals = new Set<ControlActionSearchModal>();
+  private readonly pendingSessionRoomModals = new Set<SessionRoomSuggestModal>();
   private commandSearchRefreshPending = false;
   private activationPromise: Promise<WorkspaceLeaf> | null = null;
   private entityIndex: readonly EntityIndexEntry[] | null = null;
@@ -1465,16 +1525,28 @@ export default class VeiledChicagoControlPlane extends Plugin {
       this.registerEvent(
         this.app.vault.on("create", (file) => {
           if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+          if (file.parent?.path === VAULT_PATHS.sessionsRoot) this.scheduleRefresh();
         })
       );
       this.registerEvent(
         this.app.vault.on("delete", (file) => {
           if (this.isEntityScopePath(file.path)) this.invalidateEntityIndex();
+          if (file.path === this.settings.activeSessionRoom || file.parent?.path === VAULT_PATHS.sessionsRoot) {
+            this.scheduleRefresh();
+          }
         })
       );
       this.registerEvent(
         this.app.vault.on("rename", (file, oldPath) => {
           if (this.isEntityScopePath(file.path) || this.isEntityScopePath(oldPath)) this.invalidateEntityIndex();
+          if (
+            oldPath === this.settings.activeSessionRoom ||
+            file.path === this.settings.activeSessionRoom ||
+            file.parent?.path === VAULT_PATHS.sessionsRoot ||
+            oldPath.startsWith(`${VAULT_PATHS.sessionsRoot}/`)
+          ) {
+            this.scheduleRefresh();
+          }
         })
       );
       this.scheduleRefresh(0);
@@ -1493,6 +1565,8 @@ export default class VeiledChicagoControlPlane extends Plugin {
     this.pendingProposalModals.clear();
     for (const modal of this.pendingCommandSearchModals) modal.close();
     this.pendingCommandSearchModals.clear();
+    for (const modal of this.pendingSessionRoomModals) modal.close();
+    this.pendingSessionRoomModals.clear();
     this.commandSearchRefreshPending = false;
     for (const child of this.activeChildren) {
       if (!child.killed) child.kill("SIGTERM");
@@ -1727,6 +1801,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
     const latestTarget = wikilinkTarget(latestValue);
     const latestFile = latestTarget ? this.app.metadataCache.getFirstLinkpathDest(latestTarget, CURRENT_STATE_PATH) : null;
     const nextSession = parseExplicitNextSession(frontmatter.next_session);
+    const active = this.activeSession();
 
     return {
       latestLabel: wikilinkLabel(latestValue) || latestFile?.basename || "UNRESOLVED",
@@ -1735,8 +1810,8 @@ export default class VeiledChicagoControlPlane extends Plugin {
       deploymentMode: normalizeDeployment(frontmatter.deployment_mode),
       openLeadTasks: await this.countOpenTasks(CURRENT_LEADS_PATH),
       stateModified: stateFile?.stat.mtime ?? null,
-      activeSessionRoom: this.settings.activeSessionRoom,
-      activeSessionName: this.settings.activeSessionName
+      activeSessionRoom: active?.roomPath ?? null,
+      activeSessionName: active?.displayName ?? null
     };
   }
 
@@ -1885,7 +1960,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         if (["create-managed-note", "capture-quick-inbox", "set-active-session-room"].includes(action.id)) {
           return { available: true };
         }
-        return this.settings.activeSessionRoom && this.settings.activeSessionName
+        return this.activeSession()
           ? { available: true }
           : { available: false, reason: "Select an explicit active session room first." };
       case "script":
@@ -1908,17 +1983,17 @@ export default class VeiledChicagoControlPlane extends Plugin {
     }
   }
 
-  async executeAction(actionId: string, source: "view" | "block" | "command" | "protocol"): Promise<void> {
+  async executeAction(actionId: string, source: ActionSource): Promise<void> {
     const action = ACTION_BY_ID.get(actionId);
     if (!action) {
       new Notice(`Veiled Chicago Control Plane: unknown action '${actionId || "(empty)"}'.`);
       return;
     }
-    const protocolBlock = this.protocolBlockReason(action, source);
-    if (protocolBlock) {
-      new Notice(protocolBlock);
+    const sourceBlock = this.sourceBlockReason(action, source);
+    if (sourceBlock) {
+      new Notice(sourceBlock);
       await this.tryRecordRecentAction(action.id, false);
-      this.announceToViews(`${action.title} was blocked by protocol policy.`);
+      this.announceToViews(`${action.title} was blocked by action-source policy.`);
       return;
     }
 
@@ -1936,9 +2011,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
         action.confirm,
         () => {
           if (this.unloading) return;
-          const currentProtocolBlock = this.protocolBlockReason(action, source);
-          if (currentProtocolBlock) {
-            new Notice(currentProtocolBlock);
+          const currentSourceBlock = this.sourceBlockReason(action, source);
+          if (currentSourceBlock) {
+            new Notice(currentSourceBlock);
             void this.tryRecordRecentAction(action.id, false);
             return;
           }
@@ -2167,9 +2242,17 @@ export default class VeiledChicagoControlPlane extends Plugin {
     return checks;
   }
 
-  private activeSession(): { roomPath: string; displayName: string } | null {
+  activeSession(): { roomPath: string; displayName: string } | null {
     if (!this.settings.activeSessionRoom || !this.settings.activeSessionName) return null;
-    return { roomPath: this.settings.activeSessionRoom, displayName: this.settings.activeSessionName };
+    try {
+      const roomPath = normalizeSessionRoomPath(this.settings.activeSessionRoom);
+      const displayName = normalizeSessionDisplayName(roomPath, this.settings.activeSessionName);
+      const folder = this.app.vault.getAbstractFileByPath(roomPath);
+      if (!(folder instanceof TFolder) || folder.name !== displayName) return null;
+      return { roomPath, displayName };
+    } catch {
+      return null;
+    }
   }
 
   private async executeWorkflow(id: string): Promise<void> {
@@ -2269,39 +2352,53 @@ export default class VeiledChicagoControlPlane extends Plugin {
   }
 
   private openSessionRoomSelector(): void {
-    const active = this.activeSession();
-    this.openWorkflowModal(
-      "Select active session room",
-      "This registry is plugin-local. It does not modify next_session, select a lead, establish chronology, or promote prep.",
-      [
-        {
-          id: "path",
-          label: "Vault-relative room path",
-          type: "text",
-          required: true,
-          placeholder: `${VAULT_PATHS.sessionsRoot}/Session 9`,
-          value: active?.roomPath ?? `${VAULT_PATHS.sessionsRoot}/`
-        },
-        {
-          id: "name",
-          label: "Display name",
-          type: "text",
-          required: true,
-          placeholder: "Session 9",
-          value: active?.displayName ?? ""
+    const root = this.app.vault.getAbstractFileByPath(VAULT_PATHS.sessionsRoot);
+    if (!(root instanceof TFolder)) {
+      new Notice(`Sessions root is unavailable: ${VAULT_PATHS.sessionsRoot}`, 7000);
+      return;
+    }
+    const choices = root.children
+      .flatMap((child): SessionRoomChoice[] => {
+        if (!(child instanceof TFolder)) return [];
+        try {
+          const roomPath = normalizeSessionRoomPath(child.path);
+          return [{ roomPath, displayName: normalizeSessionDisplayName(roomPath, child.name) }];
+        } catch {
+          return [];
         }
-      ],
-      "Select room",
-      async (values) => {
-        const roomPath = normalizeSessionRoomPath(stringValue(values, "path"));
-        const displayName = normalizeSessionDisplayName(roomPath, stringValue(values, "name"));
-        this.settings.activeSessionRoom = roomPath;
-        this.settings.activeSessionName = displayName;
-        await this.saveSettings();
-        await this.refreshViews();
-        new Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7000);
-      }
+      })
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, "en-US", { numeric: true }));
+    if (choices.length === 0) {
+      new Notice(`No selectable direct-child folders exist below ${VAULT_PATHS.sessionsRoot}.`, 7000);
+      return;
+    }
+
+    let modal: SessionRoomSuggestModal;
+    modal = new SessionRoomSuggestModal(
+      this.app,
+      choices,
+      (choice) => {
+        void this.selectExistingSessionRoom(choice).catch((error) => this.reportActionError("Select active session room", error));
+      },
+      () => this.pendingSessionRoomModals.delete(modal)
     );
+    this.pendingSessionRoomModals.add(modal);
+    modal.open();
+  }
+
+  private async selectExistingSessionRoom(choice: SessionRoomChoice): Promise<void> {
+    const folder = this.app.vault.getAbstractFileByPath(choice.roomPath);
+    if (!(folder instanceof TFolder)) throw new Error("The selected session folder no longer exists.");
+    const roomPath = normalizeSessionRoomPath(folder.path);
+    const displayName = normalizeSessionDisplayName(roomPath, folder.name);
+    if (roomPath !== choice.roomPath || displayName !== choice.displayName) {
+      throw new Error("The selected session folder changed before selection was committed.");
+    }
+    this.settings.activeSessionRoom = roomPath;
+    this.settings.activeSessionName = displayName;
+    await this.saveSettings();
+    await this.refreshViews();
+    new Notice(`Active session room selected: ${displayName}. No canon or next-session field changed.`, 7000);
   }
 
   private proposeSessionScaffold(): void {
@@ -2377,7 +2474,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
       intake ? this.app.vault.read(intake) : Promise.resolve(null),
       currentState ? this.app.vault.read(currentState) : Promise.resolve(null)
     ]);
-    const live = await this.readLiveState();
+    if (currentStateContents === null) throw new Error(`RUN generation requires ${CURRENT_STATE_PATH}.`);
     const selectionEvidence = collectRunSelectionEvidence({
       roomPath: active.roomPath,
       displayName: active.displayName,
@@ -2389,7 +2486,7 @@ export default class VeiledChicagoControlPlane extends Plugin {
         roomPath: active.roomPath,
         displayName: active.displayName,
         selectionEvidence,
-        latestPlayedLabel: live.latestLabel,
+        currentStateEvidence: { sourcePath: CURRENT_STATE_PATH, contents: currentStateContents },
         createdDate: this.today(),
         proposalId: this.proposalId("run")
       })
@@ -2964,15 +3061,9 @@ export default class VeiledChicagoControlPlane extends Plugin {
     else element.setAttribute(name, value);
   }
 
-  private protocolBlockReason(
-    action: ControlAction,
-    source: "view" | "block" | "command" | "protocol"
-  ): string | null {
-    if (source !== "protocol") return null;
-    if (!action.protocolSafe) {
-      return "Veiled Chicago Control Plane blocked an action that is not protocol-safe.";
-    }
-    return null;
+  private sourceBlockReason(action: ControlAction, source: ActionSource): string | null {
+    if (action.allowedSources.includes(source)) return null;
+    return `Veiled Chicago Control Plane blocked ${action.title} from the ${source} action source.`;
   }
 
   private redactLocalOutput(value: string): string {
